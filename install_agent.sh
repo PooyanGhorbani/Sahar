@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.14"
+APP_VERSION="0.1.15"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -27,16 +27,37 @@ require_root() {
   fi
 }
 
-check_os() {
-  if ! grep -Eqi 'ubuntu|debian' /etc/os-release; then
-    echo "Only Ubuntu/Debian is supported"
+detect_platform() {
+  if [[ ! -f /etc/os-release ]]; then
+    echo "Unsupported Linux distribution: /etc/os-release not found"
+    exit 1
+  fi
+  . /etc/os-release
+  local os_like="${ID_LIKE:-}"
+  if [[ "${ID:-}" == "alpine" ]]; then
+    OS_FAMILY="alpine"
+    INIT_SYSTEM="openrc"
+  elif [[ "${ID:-}" =~ (ubuntu|debian) ]] || [[ "$os_like" =~ (ubuntu|debian) ]]; then
+    OS_FAMILY="debian"
+    INIT_SYSTEM="systemd"
+  else
+    echo "Unsupported Linux distribution. Supported: Ubuntu, Debian, Alpine."
     exit 1
   fi
 }
 
+check_os() {
+  detect_platform
+  echo "Detected OS family: $OS_FAMILY"
+}
+
 install_packages() {
-  apt update
-  apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    apt update
+    apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate
+  else
+    apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate
+  fi
 }
 
 
@@ -144,9 +165,59 @@ PY
   fi
 }
 
+
+map_xray_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "64" ;;
+    aarch64|arm64) echo "arm64-v8a" ;;
+    armv7l|armv7) echo "arm32-v7a" ;;
+    armv6l) echo "arm32-v6" ;;
+    i386|i686) echo "32" ;;
+    s390x) echo "s390x" ;;
+    riscv64) echo "riscv64" ;;
+    *) echo "Unsupported CPU architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+}
+
+install_xray_alpine() {
+  local arch tag url tmpdir
+  arch="$(map_xray_arch)"
+  tag="$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])')"
+  url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
+  tmpdir="$(mktemp -d)"
+  mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+  curl -fsSL "$url" -o "$tmpdir/xray.zip"
+  unzip -qo "$tmpdir/xray.zip" -d "$tmpdir"
+  install -m 0755 "$tmpdir/xray" /usr/local/bin/xray
+  if [[ -f "$tmpdir/geoip.dat" ]]; then install -m 0644 "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat; fi
+  if [[ -f "$tmpdir/geosite.dat" ]]; then install -m 0644 "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat; fi
+  if [[ ! -f /usr/local/etc/xray/config.json ]]; then
+    echo '{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom","settings":{}}]}' > /usr/local/etc/xray/config.json
+  fi
+  cat > /etc/init.d/xray <<'EOF'
+#!/sbin/openrc-run
+name="xray"
+description="Xray service"
+command="/usr/local/bin/xray"
+command_args="run -config /usr/local/etc/xray/config.json"
+pidfile="/run/xray.pid"
+command_background=true
+output_log="/var/log/xray/service.log"
+error_log="/var/log/xray/service.err"
+depend() { need net; }
+EOF
+  chmod +x /etc/init.d/xray
+  rm -rf "$tmpdir"
+}
+
+
 install_xray() {
-  echo "Installing Xray using the official installer..."
-  bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
+  echo "Installing Xray..."
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
+  else
+    install_xray_alpine
+  fi
 }
 
 prepare_dirs() {
@@ -191,13 +262,21 @@ JSON
 }
 
 setup_venv() {
-  python3 -m venv "$VENV_DIR"
+  if ! python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
+    if command -v virtualenv >/dev/null 2>&1; then
+      virtualenv "$VENV_DIR"
+    else
+      python3 -m ensurepip --upgrade || true
+      python3 -m venv "$VENV_DIR"
+    fi
+  fi
   "$VENV_DIR/bin/pip" install --upgrade pip
   "$VENV_DIR/bin/pip" install -r "$APP_APP_DIR/requirements.txt"
 }
 
 write_service() {
-  cat > "/etc/systemd/system/${API_SERVICE_NAME}.service" <<SERVICE
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "/etc/systemd/system/${API_SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=Sahar Agent API
 After=network-online.target xray.service
@@ -222,39 +301,55 @@ ReadWritePaths=$APP_DIR /usr/local/etc/xray /var/log/xray
 [Install]
 WantedBy=multi-user.target
 SERVICE
+  else
+    cat > "/etc/init.d/${API_SERVICE_NAME}" <<SERVICE
+#!/sbin/openrc-run
+name="${API_SERVICE_NAME}"
+description="Sahar Agent API"
+command="${VENV_DIR}/bin/gunicorn"
+command_args="-w 2 -k gthread --threads 4 --bind ${AGENT_LISTEN_HOST}:${AGENT_LISTEN_PORT} agent_api:APP"
+directory="${APP_APP_DIR}"
+pidfile="/run/${API_SERVICE_NAME}.pid"
+command_background=true
+output_log="${APP_LOG_DIR}/agent-service.log"
+error_log="${APP_LOG_DIR}/agent-service.err"
+depend() { need net xray; }
+start_pre() { export SAHAR_CONFIG="${APP_DATA_DIR}/config.json"; }
+SERVICE
+    chmod +x "/etc/init.d/${API_SERVICE_NAME}"
+  fi
 }
 
-write_logrotate() {
-  cat > /etc/logrotate.d/sahar-agent <<EOF2
-$APP_LOG_DIR/*.log {
-  daily
-  rotate 14
-  compress
-  missingok
-  notifempty
-  copytruncate
-}
-EOF2
-}
 
 enable_services() {
-  systemctl daemon-reload
-  systemctl enable xray --now
-  systemctl enable "$API_SERVICE_NAME" --now
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl daemon-reload
+    systemctl enable xray --now
+    systemctl enable "$API_SERVICE_NAME" --now
+  else
+    rc-update add xray default
+    rc-service xray start
+    rc-update add "$API_SERVICE_NAME" default
+    rc-service "$API_SERVICE_NAME" start
+  fi
 }
+
 
 print_done() {
   echo
   echo "Agent installed successfully."
-  echo "Service: systemctl status $API_SERVICE_NAME"
-  echo "Logs: journalctl -u $API_SERVICE_NAME -f"
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    echo "Service: systemctl status $API_SERVICE_NAME"
+    echo "Logs: journalctl -u $API_SERVICE_NAME -f"
+  else
+    echo "Service: rc-service $API_SERVICE_NAME status"
+    echo "Logs: tail -f $APP_LOG_DIR/*.log"
+  fi
   echo
   echo "Agent API URL: http://${PUBLIC_HOST}:${AGENT_LISTEN_PORT}"
   echo "Agent token: ${AGENT_TOKEN}"
-  if [[ "$TRANSPORT_MODE" == "reality" ]]; then
-    echo "REALITY mode selected. Public key and short ID will be generated on first start and exposed via /server_health from the master."
-  fi
 }
+
 
 main() {
   print_banner

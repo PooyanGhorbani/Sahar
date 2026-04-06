@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.14"
+APP_VERSION="0.1.15"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -33,21 +33,46 @@ require_root() {
   fi
 }
 
-check_os() {
-  if ! grep -Eqi 'ubuntu|debian' /etc/os-release; then
-    echo "Only Ubuntu/Debian is supported"
+detect_platform() {
+  if [[ ! -f /etc/os-release ]]; then
+    echo "Unsupported Linux distribution: /etc/os-release not found"
+    exit 1
+  fi
+  . /etc/os-release
+  local os_like="${ID_LIKE:-}"
+  if [[ "${ID:-}" == "alpine" ]]; then
+    OS_FAMILY="alpine"
+    INIT_SYSTEM="openrc"
+  elif [[ "${ID:-}" =~ (ubuntu|debian) ]] || [[ "$os_like" =~ (ubuntu|debian) ]]; then
+    OS_FAMILY="debian"
+    INIT_SYSTEM="systemd"
+  else
+    echo "Unsupported Linux distribution. Supported: Ubuntu, Debian, Alpine."
     exit 1
   fi
 }
 
+check_os() {
+  detect_platform
+  echo "Detected OS family: $OS_FAMILY"
+}
+
 install_packages() {
-  apt update
-  apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip jq uuid-runtime dnsutils
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    apt update
+    apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate
+  else
+    apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow
+  fi
 }
 
 ensure_user() {
   if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
-    useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+    if [[ "$OS_FAMILY" == "debian" ]]; then
+      useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+    else
+      adduser -S -D -H -h "$APP_DIR" -s /sbin/nologin "$SERVICE_USER"
+    fi
   fi
 }
 
@@ -253,7 +278,14 @@ JSON
 }
 
 setup_venv() {
-  python3 -m venv "$VENV_DIR"
+  if ! python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
+    if command -v virtualenv >/dev/null 2>&1; then
+      virtualenv "$VENV_DIR"
+    else
+      python3 -m ensurepip --upgrade || true
+      python3 -m venv "$VENV_DIR"
+    fi
+  fi
   "$VENV_DIR/bin/pip" install --upgrade pip
   "$VENV_DIR/bin/pip" install -r "$APP_APP_DIR/requirements.txt"
 }
@@ -265,7 +297,8 @@ bootstrap_cloudflare() {
 }
 
 write_services() {
-  cat > "/etc/systemd/system/${BOT_SERVICE_NAME}.service" <<SERVICE
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "/etc/systemd/system/${BOT_SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=Sahar Master Telegram Bot
 After=network-online.target
@@ -290,7 +323,7 @@ ReadWritePaths=$APP_DIR
 WantedBy=multi-user.target
 SERVICE
 
-  cat > "/etc/systemd/system/${SUB_SERVICE_NAME}.service" <<SERVICE
+    cat > "/etc/systemd/system/${SUB_SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=Sahar Master Subscription API
 After=network-online.target
@@ -315,7 +348,7 @@ ReadWritePaths=$APP_DIR
 WantedBy=multi-user.target
 SERVICE
 
-  cat > "/etc/systemd/system/${SCHED_SERVICE_NAME}.service" <<SERVICE
+    cat > "/etc/systemd/system/${SCHED_SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=Sahar Master Scheduler
 After=network-online.target
@@ -340,8 +373,8 @@ ReadWritePaths=$APP_DIR
 WantedBy=multi-user.target
 SERVICE
 
-  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    cat > "/etc/systemd/system/${LOCAL_AGENT_SERVICE_NAME}.service" <<SERVICE
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      cat > "/etc/systemd/system/${LOCAL_AGENT_SERVICE_NAME}.service" <<SERVICE
 [Unit]
 Description=Sahar Local Agent API
 After=network-online.target xray.service
@@ -366,8 +399,79 @@ ReadWritePaths=$APP_DIR /usr/local/etc/xray /var/log/xray
 [Install]
 WantedBy=multi-user.target
 SERVICE
+    fi
+  else
+    cat > "/etc/init.d/${BOT_SERVICE_NAME}" <<SERVICE
+#!/sbin/openrc-run
+name="${BOT_SERVICE_NAME}"
+description="Sahar Master Telegram Bot"
+command="${VENV_DIR}/bin/python"
+command_args="${APP_APP_DIR}/bot.py"
+command_user="${SERVICE_USER}:${SERVICE_USER}"
+directory="${APP_APP_DIR}"
+pidfile="/run/${BOT_SERVICE_NAME}.pid"
+command_background=true
+output_log="${APP_LOG_DIR}/bot-service.log"
+error_log="${APP_LOG_DIR}/bot-service.err"
+depend() { need net; }
+start_pre() { export SAHAR_CONFIG="${APP_DATA_DIR}/config.json"; }
+SERVICE
+    chmod +x "/etc/init.d/${BOT_SERVICE_NAME}"
+
+    cat > "/etc/init.d/${SUB_SERVICE_NAME}" <<SERVICE
+#!/sbin/openrc-run
+name="${SUB_SERVICE_NAME}"
+description="Sahar Master Subscription API"
+command="${VENV_DIR}/bin/gunicorn"
+command_args="-w 2 -k gthread --threads 4 --bind ${SUBSCRIPTION_BIND_HOST}:${SUBSCRIPTION_BIND_PORT} subscription_api:APP"
+command_user="${SERVICE_USER}:${SERVICE_USER}"
+directory="${APP_APP_DIR}"
+pidfile="/run/${SUB_SERVICE_NAME}.pid"
+command_background=true
+output_log="${APP_LOG_DIR}/subscription-service.log"
+error_log="${APP_LOG_DIR}/subscription-service.err"
+depend() { need net; }
+start_pre() { export SAHAR_CONFIG="${APP_DATA_DIR}/config.json"; }
+SERVICE
+    chmod +x "/etc/init.d/${SUB_SERVICE_NAME}"
+
+    cat > "/etc/init.d/${SCHED_SERVICE_NAME}" <<SERVICE
+#!/sbin/openrc-run
+name="${SCHED_SERVICE_NAME}"
+description="Sahar Master Scheduler"
+command="${VENV_DIR}/bin/python"
+command_args="${APP_APP_DIR}/scheduler.py"
+command_user="${SERVICE_USER}:${SERVICE_USER}"
+directory="${APP_APP_DIR}"
+pidfile="/run/${SCHED_SERVICE_NAME}.pid"
+command_background=true
+output_log="${APP_LOG_DIR}/scheduler-service.log"
+error_log="${APP_LOG_DIR}/scheduler-service.err"
+depend() { need net; }
+start_pre() { export SAHAR_CONFIG="${APP_DATA_DIR}/config.json"; }
+SERVICE
+    chmod +x "/etc/init.d/${SCHED_SERVICE_NAME}"
+
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      cat > "/etc/init.d/${LOCAL_AGENT_SERVICE_NAME}" <<SERVICE
+#!/sbin/openrc-run
+name="${LOCAL_AGENT_SERVICE_NAME}"
+description="Sahar Local Agent API"
+command="${VENV_DIR}/bin/gunicorn"
+command_args="-w 2 -k gthread --threads 4 --bind ${LOCAL_AGENT_LISTEN_HOST}:${LOCAL_AGENT_LISTEN_PORT} agent_api:APP"
+directory="${APP_AGENT_APP_DIR}"
+pidfile="/run/${LOCAL_AGENT_SERVICE_NAME}.pid"
+command_background=true
+output_log="${APP_LOG_DIR}/local-agent-service.log"
+error_log="${APP_LOG_DIR}/local-agent-service.err"
+depend() { need net xray; }
+start_pre() { export SAHAR_CONFIG="${APP_DATA_DIR}/local-agent-config.json"; }
+SERVICE
+      chmod +x "/etc/init.d/${LOCAL_AGENT_SERVICE_NAME}"
+    fi
   fi
 }
+
 
 write_logrotate() {
   cat > /etc/logrotate.d/sahar-master <<EOF2
@@ -382,6 +486,52 @@ $APP_LOG_DIR/*.log {
 EOF2
 }
 
+
+map_xray_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "64" ;;
+    aarch64|arm64) echo "arm64-v8a" ;;
+    armv7l|armv7) echo "arm32-v7a" ;;
+    armv6l) echo "arm32-v6" ;;
+    i386|i686) echo "32" ;;
+    s390x) echo "s390x" ;;
+    riscv64) echo "riscv64" ;;
+    *) echo "Unsupported CPU architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+}
+
+install_xray_alpine() {
+  local arch tag url tmpdir
+  arch="$(map_xray_arch)"
+  tag="$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])')"
+  url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
+  tmpdir="$(mktemp -d)"
+  mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+  curl -fsSL "$url" -o "$tmpdir/xray.zip"
+  unzip -qo "$tmpdir/xray.zip" -d "$tmpdir"
+  install -m 0755 "$tmpdir/xray" /usr/local/bin/xray
+  if [[ -f "$tmpdir/geoip.dat" ]]; then install -m 0644 "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat; fi
+  if [[ -f "$tmpdir/geosite.dat" ]]; then install -m 0644 "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat; fi
+  if [[ ! -f /usr/local/etc/xray/config.json ]]; then
+    echo '{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom","settings":{}}]}' > /usr/local/etc/xray/config.json
+  fi
+  cat > /etc/init.d/xray <<'EOF'
+#!/sbin/openrc-run
+name="xray"
+description="Xray service"
+command="/usr/local/bin/xray"
+command_args="run -config /usr/local/etc/xray/config.json"
+pidfile="/run/xray.pid"
+command_background=true
+output_log="/var/log/xray/service.log"
+error_log="/var/log/xray/service.err"
+depend() { need net; }
+EOF
+  chmod +x /etc/init.d/xray
+  rm -rf "$tmpdir"
+}
+
+
 install_xray_if_needed() {
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
     echo "Installing Xray using the official installer..."
@@ -391,47 +541,84 @@ install_xray_if_needed() {
 
 enable_services() {
   chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
-  systemctl daemon-reload
-  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    systemctl enable xray --now
-    systemctl enable "$LOCAL_AGENT_SERVICE_NAME" --now
-    for _ in $(seq 1 20); do
-      if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
-        break
-      fi
-      sleep 2
-    done
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl daemon-reload
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      systemctl enable xray --now
+      systemctl enable "$LOCAL_AGENT_SERVICE_NAME" --now
+      for _ in $(seq 1 20); do
+        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 2
+      done
+    fi
+    systemctl enable "$BOT_SERVICE_NAME" --now
+    systemctl enable "$SCHED_SERVICE_NAME" --now
+    systemctl enable "$SUB_SERVICE_NAME" --now
+  else
+    rc-update add "$BOT_SERVICE_NAME" default
+    rc-update add "$SCHED_SERVICE_NAME" default
+    rc-update add "$SUB_SERVICE_NAME" default
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      rc-update add xray default
+      rc-service xray start
+      rc-update add "$LOCAL_AGENT_SERVICE_NAME" default
+      rc-service "$LOCAL_AGENT_SERVICE_NAME" start
+      for _ in $(seq 1 20); do
+        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 2
+      done
+    fi
+    rc-service "$BOT_SERVICE_NAME" start
+    rc-service "$SCHED_SERVICE_NAME" start
+    rc-service "$SUB_SERVICE_NAME" start
   fi
-  systemctl enable "$BOT_SERVICE_NAME" --now
-  systemctl enable "$SCHED_SERVICE_NAME" --now
-  systemctl enable "$SUB_SERVICE_NAME" --now
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    su -s /bin/bash "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"
+    su -s /bin/sh "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"
   fi
 }
+
 
 print_done() {
   echo
   echo "Master installed successfully."
-  echo "Services:"
-  echo "  systemctl status $BOT_SERVICE_NAME"
-  echo "  systemctl status $SCHED_SERVICE_NAME"
-  echo "  systemctl status $SUB_SERVICE_NAME"
-  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    echo "  systemctl status xray"
-    echo "  systemctl status $LOCAL_AGENT_SERVICE_NAME"
-    echo "Local server auto-registered as: $LOCAL_SERVER_NAME"
-  fi
-  echo "Logs:"
-  echo "  journalctl -u $BOT_SERVICE_NAME -f"
-  echo "  journalctl -u $SCHED_SERVICE_NAME -f"
-  echo "  journalctl -u $SUB_SERVICE_NAME -f"
-  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    echo "  journalctl -u $LOCAL_AGENT_SERVICE_NAME -f"
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    echo "Services:"
+    echo "  systemctl status $BOT_SERVICE_NAME"
+    echo "  systemctl status $SCHED_SERVICE_NAME"
+    echo "  systemctl status $SUB_SERVICE_NAME"
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      echo "  systemctl status xray"
+      echo "  systemctl status $LOCAL_AGENT_SERVICE_NAME"
+      echo "Local server auto-registered as: $LOCAL_SERVER_NAME"
+    fi
+    echo "Logs:"
+    echo "  journalctl -u $BOT_SERVICE_NAME -f"
+    echo "  journalctl -u $SCHED_SERVICE_NAME -f"
+    echo "  journalctl -u $SUB_SERVICE_NAME -f"
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      echo "  journalctl -u $LOCAL_AGENT_SERVICE_NAME -f"
+    fi
+  else
+    echo "Services:"
+    echo "  rc-service $BOT_SERVICE_NAME status"
+    echo "  rc-service $SCHED_SERVICE_NAME status"
+    echo "  rc-service $SUB_SERVICE_NAME status"
+    if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+      echo "  rc-service xray status"
+      echo "  rc-service $LOCAL_AGENT_SERVICE_NAME status"
+      echo "Local server auto-registered as: $LOCAL_SERVER_NAME"
+    fi
+    echo "Logs:"
+    echo "  tail -f $APP_LOG_DIR/*.log"
   fi
   echo "Subscription base URL: $SUBSCRIPTION_BASE_URL"
   echo "Start in Telegram with /help"
 }
+
 
 main() {
   print_banner
