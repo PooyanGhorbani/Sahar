@@ -76,34 +76,48 @@ unzip sahar_0.1.18_single_installer.zip && cd sahar_0.1.18_single_installer && s
 
 ## نصب مستقیم از GitHub با یک خط دستور | One-line direct install from GitHub
 
-اگر پروژه را داخل GitHub گذاشته‌ای، می‌توانی بدون دانلود دستی ZIP، مستقیم با یک خط دستور نصبش کنی.
+آدرس واقعی پروژه:
+
+```text
+https://github.com/PooyanGhorbani/Sahar
+```
+
+اگر بخواهی مستقیم از خود GitHub نصب کنی و هیچ ZIPی را دستی دانلود نکنی، این دستورها را همان‌طور که هستند کپی کن.
 
 ### نصب Master از GitHub
 
 ```bash
-curl -fsSL https://github.com/<OWNER>/<REPO>/archive/refs/heads/<BRANCH>.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/<REPO>-<BRANCH> && sudo sh install.sh master
+git clone https://github.com/PooyanGhorbani/Sahar.git /opt/sahar && cd /opt/sahar && sudo sh install.sh master
 ```
 
 ### نصب Agent از GitHub
 
 ```bash
-curl -fsSL https://github.com/<OWNER>/<REPO>/archive/refs/heads/<BRANCH>.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/<REPO>-<BRANCH> && sudo sh install.sh agent
+git clone https://github.com/PooyanGhorbani/Sahar.git /opt/sahar && cd /opt/sahar && sudo sh install.sh agent
 ```
 
-### نکته مهم برای README و GitHub
+### اگر `git` روی سرور نصب نبود
 
-در دو دستور بالا این سه مقدار را با مقدار واقعی ریپوی خودت عوض کن:
-- `<OWNER>` نام اکانت یا سازمان GitHub
-- `<REPO>` نام مخزن
-- `<BRANCH>` نام branch مثل `main`
+می‌توانی بدون `git` هم مستقیم از GitHub نصب کنی:
 
-مثال:
+#### Master
 
 ```bash
-curl -fsSL https://github.com/example-org/sahar/archive/refs/heads/main.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/sahar-main && sudo sh install.sh master
+curl -fsSL https://github.com/PooyanGhorbani/Sahar/archive/refs/heads/main.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/Sahar-main && sudo sh install.sh master
 ```
 
-این روش زمانی مناسب است که بخواهی همیشه آخرین نسخه branch را مستقیم نصب کنی.
+#### Agent
+
+```bash
+curl -fsSL https://github.com/PooyanGhorbani/Sahar/archive/refs/heads/main.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/Sahar-main && sudo sh install.sh agent
+```
+
+### نکته مهم
+
+- هر دو دستور بالا آخرین نسخه branch `main` را نصب می‌کنند
+- اگر پروژه را در مسیر دیگری می‌خواهی، فقط `/opt/sahar` را عوض کن
+- اگر دستور را با کاربر عادی اجرا می‌کنی، بخش `sudo` باید روی آن سرور سالم و فعال باشد
+- اگر از قبل پوشه `/opt/sahar` وجود دارد، قبل از clone آن را پاک کن یا مسیر دیگری بده
 
 ---
 
@@ -313,6 +327,30 @@ Cloudflare automation در این پروژه معمولاً در این نقاط
 3. وقتی سرور در دیتابیس ثبت شد و IP آن مشخص شد
 4. Master از Cloudflare API رکورد DNS را create/update می‌کند
 5. اگر بعداً سرور را حذف کنی، پروژه تلاش می‌کند رکورد DNS را هم پاک کند
+
+### روند کامل اتصال خودکار سرور به Cloudflare به زبان ساده
+1. روی Cloudflare یک API token می‌سازی که دسترسی `Zone Read` و `DNS Write` داشته باشد
+2. هنگام نصب Master، دامنه اصلی، base subdomain و token را وارد می‌کنی
+3. Master zone مربوط به دامنه را پیدا می‌کند و اطلاعات Cloudflare را در config نگه می‌دارد
+4. وقتی از داخل بات سرور جدید را اضافه می‌کنی، Master بعد از نصب Agent، IP واقعی آن سرور را به دست می‌آورد
+5. Master با نام سرور یک hostname می‌سازد؛ مثلاً برای `ir1` و base subdomain برابر `vpn`، خروجی می‌شود `ir1.vpn.example.com`
+6. اگر رکورد از قبل وجود داشته باشد، آن را update می‌کند؛ اگر وجود نداشته باشد، آن را create می‌کند
+7. نام نهایی DNS داخل دیتابیس ذخیره می‌شود و می‌تواند در خروجی‌ها، subscription یا public host همان سرور استفاده شود
+
+### مثال عملی کامل
+فرض کن این اطلاعات را وارد کرده‌ای:
+- دامنه اصلی: `example.com`
+- base subdomain: `vpn`
+- نام سرور: `de1`
+- IP واقعی سرور: `198.51.100.25`
+
+خروجی نهایی Cloudflare این می‌شود:
+
+```text
+de1.vpn.example.com -> 198.51.100.25
+```
+
+اگر بعداً IP همین سرور عوض شود و دوباره provisioning یا update انجام دهی، پروژه رکورد را روی IP جدید sync می‌کند.
 
 ### چه چیزهایی لازم داری؟
 برای اینکه این بخش درست کار کند، باید این پیش‌نیازها را داشته باشی:
