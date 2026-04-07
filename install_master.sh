@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.15"
+APP_VERSION="0.1.17"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -534,8 +534,12 @@ EOF
 
 install_xray_if_needed() {
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    echo "Installing Xray using the official installer..."
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
+    echo "Installing Xray..."
+    if [[ "$OS_FAMILY" == "debian" ]]; then
+      bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
+    else
+      install_xray_alpine
+    fi
   fi
 }
 

@@ -1,0 +1,13 @@
+Sahar 0.1.17 release bundle
+
+Applied fixes:
+- Added OpenRC-aware service management for agent and master health/status checks.
+- Fixed Alpine local-node Xray installation path in install_master.sh.
+- Made primary VLESS link/QR prefer Reality when transport_mode=dual and Reality data exists.
+- Hardened agent installer and SSH provisioner to prefer restricted allowed_sources values.
+- Updated README examples to use the unified install.sh entrypoint and current bundle name.
+
+Validation performed:
+- Python syntax compilation for all Python modules.
+- Bash syntax check for install.sh, install_master.sh, install_agent.sh.
+- Smoke tests for VLESS link generation and provisioning IP restriction helper.

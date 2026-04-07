@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import functools
+import shutil
+import subprocess
 import hashlib
 import json
 import logging
@@ -124,6 +127,44 @@ def bytes_to_gb(value: int) -> float:
 
 
 
+
+
+@functools.lru_cache(maxsize=1)
+def detect_service_manager() -> str:
+    if os.path.isdir('/run/systemd/system') and shutil.which('systemctl'):
+        return 'systemd'
+    if shutil.which('rc-service'):
+        return 'openrc'
+    if shutil.which('systemctl'):
+        return 'systemd'
+    return 'unknown'
+
+
+def pick_primary_profile(user: Dict) -> Dict:
+    transport_mode = str(user.get('transport_mode') or '').lower()
+    has_reality = bool(user.get('reality_server_name') and user.get('reality_public_key'))
+    if transport_mode == 'reality':
+        profile_key = 'reality'
+    elif transport_mode == 'dual' and has_reality:
+        profile_key = 'reality'
+    else:
+        profile_key = 'simple'
+
+    if profile_key == 'reality':
+        port = int(user.get('reality_port') or user.get('xray_port') or user.get('simple_port') or 0)
+    else:
+        port = int(user.get('simple_port') or user.get('xray_port') or 0)
+
+    return {
+        'public_host': user['public_host'],
+        'port': port,
+        'profile_key': profile_key,
+        'reality_server_name': user.get('reality_server_name') or '',
+        'reality_public_key': user.get('reality_public_key') or '',
+        'reality_short_id': user.get('reality_short_id') or '',
+        'fingerprint': user.get('fingerprint') or 'chrome',
+    }
+
 def build_vless_link_for_profile(uuid_value: str, username: str, profile: Dict) -> str:
     host = profile['public_host']
     port = int(profile['port'])
@@ -144,15 +185,7 @@ def build_vless_link_for_profile(uuid_value: str, username: str, profile: Dict) 
     return f"vless://{uuid_value}@{host}:{port}?encryption=none&security=none&type=tcp#{username_q}"
 
 def build_vless_link(user: Dict) -> str:
-    profile = {
-        'public_host': user['public_host'],
-        'port': int(user.get('xray_port') or 0),
-        'profile_key': 'reality' if (user.get('transport_mode') or '').lower() == 'reality' else 'simple',
-        'reality_server_name': user.get('reality_server_name') or '',
-        'reality_public_key': user.get('reality_public_key') or '',
-        'reality_short_id': user.get('reality_short_id') or '',
-        'fingerprint': user.get('fingerprint') or 'chrome',
-    }
+    profile = pick_primary_profile(user)
     return build_vless_link_for_profile(user['uuid'], user['username'], profile)
 
 
@@ -193,12 +226,16 @@ def export_users_csv(path: str, users: Iterable[Dict]) -> str:
 
 
 def systemctl_is_active(service_name: str) -> bool:
-    import subprocess
     try:
-        subprocess.check_call(['systemctl', 'is-active', '--quiet', service_name])
-        return True
+        manager = detect_service_manager()
+        if manager == 'systemd':
+            subprocess.check_call(['systemctl', 'is-active', '--quiet', service_name])
+            return True
+        if manager == 'openrc':
+            return subprocess.run(['rc-service', service_name, 'status'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     except Exception:
         return False
+    return False
 
 
 def send_telegram_message(bot_token: str, chat_ids: Iterable[str], text: str) -> None:

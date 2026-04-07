@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.15"
+APP_VERSION="0.1.17"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -51,6 +51,27 @@ check_os() {
   echo "Detected OS family: $OS_FAMILY"
 }
 
+
+detect_ssh_client_ip() {
+  if [[ -n "${SSH_CLIENT:-}" ]]; then
+    echo "${SSH_CLIENT%% *}"
+    return
+  fi
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    echo "${SSH_CONNECTION%% *}"
+    return
+  fi
+}
+
+normalize_allowed_sources() {
+  local raw="${1:-}"
+  if [[ "$raw" == "ANY" || "$raw" == "any" || "$raw" == "Any" || "$raw" == "*" ]]; then
+    echo ""
+  else
+    echo "$raw"
+  fi
+}
+
 install_packages() {
   if [[ "$OS_FAMILY" == "debian" ]]; then
     apt update
@@ -82,7 +103,7 @@ load_noninteractive_env() {
   XRAY_API_PORT="${XRAY_API_PORT:-10085}"
   AGENT_LISTEN_HOST="${AGENT_LISTEN_HOST:-0.0.0.0}"
   AGENT_LISTEN_PORT="${AGENT_LISTEN_PORT:-8787}"
-  ALLOWED_SOURCES="${ALLOWED_SOURCES:-}"
+  ALLOWED_SOURCES="$(normalize_allowed_sources "${ALLOWED_SOURCES:-}")"
   AGENT_TOKEN="${AGENT_TOKEN:-}"
   if [[ -z "${PUBLIC_HOST:-}" ]]; then
     echo "PUBLIC_HOST is required in NONINTERACTIVE mode"
@@ -150,11 +171,20 @@ ask_config() {
   REALITY_PORT="${REALITY_PORT:-8443}"
   read -rp "Xray API stats port [10085]: " XRAY_API_PORT
   XRAY_API_PORT="${XRAY_API_PORT:-10085}"
+  local detected_source default_source
+  detected_source="$(detect_ssh_client_ip || true)"
+  default_source="${detected_source:+${detected_source}/32}"
   read -rp "Agent listen host [0.0.0.0]: " AGENT_LISTEN_HOST
   AGENT_LISTEN_HOST="${AGENT_LISTEN_HOST:-0.0.0.0}"
   read -rp "Agent listen port [8787]: " AGENT_LISTEN_PORT
   AGENT_LISTEN_PORT="${AGENT_LISTEN_PORT:-8787}"
-  read -rp "Allowed source IPs/CIDRs (comma-separated, blank means any): " ALLOWED_SOURCES
+  if [[ -n "$default_source" ]]; then
+    read -rp "Allowed source IPs/CIDRs (recommended: master IP, use ANY for unrestricted) [$default_source]: " ALLOWED_SOURCES
+    ALLOWED_SOURCES="${ALLOWED_SOURCES:-$default_source}"
+  else
+    read -rp "Allowed source IPs/CIDRs (recommended: master IP, use ANY for unrestricted): " ALLOWED_SOURCES
+  fi
+  ALLOWED_SOURCES="$(normalize_allowed_sources "$ALLOWED_SOURCES")"
   read -rp "Agent API token [leave blank to auto-generate]: " AGENT_TOKEN
   if [[ -z "$AGENT_TOKEN" ]]; then
     AGENT_TOKEN="$(python3 - <<'PY'

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hmac
+import functools
 import ipaddress
 import json
 import logging
 import os
 import secrets
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -130,6 +132,44 @@ def source_allowed(remote_ip: str, allowed_sources: Iterable[str]) -> bool:
 def safe_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(str(a), str(b))
 
+
+
+
+@functools.lru_cache(maxsize=1)
+def detect_service_manager() -> str:
+    if os.path.isdir('/run/systemd/system') and shutil.which('systemctl'):
+        return 'systemd'
+    if shutil.which('rc-service'):
+        return 'openrc'
+    if shutil.which('systemctl'):
+        return 'systemd'
+    return 'unknown'
+
+
+def service_restart(service_name: str) -> None:
+    manager = detect_service_manager()
+    if manager == 'systemd':
+        subprocess.check_call(['systemctl', 'restart', service_name])
+        return
+    if manager == 'openrc':
+        result = subprocess.run(['rc-service', service_name, 'restart'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode != 0:
+            subprocess.check_call(['rc-service', service_name, 'start'])
+        return
+    raise RuntimeError(f'unsupported service manager for restart: {manager}')
+
+
+def service_is_active(service_name: str) -> bool:
+    manager = detect_service_manager()
+    try:
+        if manager == 'systemd':
+            subprocess.check_call(['systemctl', 'is-active', '--quiet', service_name])
+            return True
+        if manager == 'openrc':
+            return subprocess.run(['rc-service', service_name, 'status'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except Exception:
+        return False
+    return False
 
 def xray_version() -> str:
     try:

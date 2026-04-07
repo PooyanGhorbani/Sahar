@@ -43,6 +43,7 @@ class SSHProvisioner:
         bundle_path = self._build_bundle()
         remote_dir = f"/tmp/sahar-bootstrap-{int(time.time())}"
         api_url = f"http://{host}:{agent_listen_port}"
+        allowed_sources = self._detect_allowed_source_for_host(host, ssh_port)
 
         ssh = self._connect(host, ssh_port, ssh_username, ssh_password)
         try:
@@ -71,7 +72,7 @@ class SSHProvisioner:
                 'XRAY_API_PORT': str(xray_api_port),
                 'AGENT_LISTEN_HOST': '0.0.0.0',
                 'AGENT_LISTEN_PORT': str(agent_listen_port),
-                'ALLOWED_SOURCES': '',
+                'ALLOWED_SOURCES': allowed_sources,
                 'AGENT_TOKEN': agent_token,
             }
             env_prefix = ' '.join(f"{k}={shlex.quote(v)}" for k, v in env.items())
@@ -150,6 +151,24 @@ class SSHProvisioner:
                 last_error = str(exc)
                 time.sleep(5)
         raise ProvisionError(last_error)
+
+    @staticmethod
+    def _detect_allowed_source_for_host(host: str, port: int) -> str:
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            return ''
+        for family, _socktype, _proto, _canonname, sockaddr in infos:
+            try:
+                with socket.socket(family, socket.SOCK_DGRAM) as sock:
+                    sock.connect(sockaddr)
+                    local_ip = sock.getsockname()[0]
+                if ':' in local_ip:
+                    return f'{local_ip}/128'
+                return f'{local_ip}/32'
+            except OSError:
+                continue
+        return ''
 
     @staticmethod
     def _infer_host_mode(host: str) -> str:

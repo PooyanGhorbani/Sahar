@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
-from utils import ensure_dir, generate_short_id, generate_x25519_keypair, system_metrics
+from utils import ensure_dir, generate_short_id, generate_x25519_keypair, service_is_active, service_restart, system_metrics
 
 
 class XrayManager:
@@ -201,14 +201,10 @@ class XrayManager:
         return self.add_client(username, uuid_value)
 
     def restart_service(self) -> None:
-        subprocess.check_call(['systemctl', 'restart', 'xray'])
+        service_restart('xray')
 
     def is_active(self) -> bool:
-        try:
-            subprocess.check_call(['systemctl', 'is-active', '--quiet', 'xray'])
-            return True
-        except Exception:
-            return False
+        return service_is_active('xray')
 
     def profile_summaries(self) -> List[Dict]:
         return [
