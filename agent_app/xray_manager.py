@@ -32,6 +32,10 @@ class XrayManager:
 
     def ensure_runtime_settings(self) -> Dict:
         updated = False
+        if not self.reality_server_name:
+            self.reality_server_name = 'www.cloudflare.com'
+            self.config['reality_server_name'] = self.reality_server_name
+            updated = True
         if not self.reality_private_key or not self.reality_public_key:
             private_key, public_key = generate_x25519_keypair()
             self.config['reality_private_key'] = private_key

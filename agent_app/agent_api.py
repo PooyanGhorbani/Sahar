@@ -8,7 +8,7 @@ from functools import wraps
 
 from flask import Flask, jsonify, request, send_file
 
-from utils import load_config, now_iso, parse_allowed_sources, safe_compare, save_config, setup_logging, source_allowed
+from utils import load_config, now_iso, parse_allowed_sources, safe_compare, save_config, setup_logging, source_allowed, xray_version
 from xray_manager import XrayManager
 
 CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-agent/data/config.json')
@@ -249,7 +249,15 @@ def backup_download(filename: str):
 @APP.get('/version')
 @require_token
 def version():
-    return ok({'service': 'sahar-agent', 'time': now_iso()})
+    return ok(
+        {
+            'service': 'sahar-agent',
+            'package_version': CONFIG.get('package_version', ''),
+            'agent_name': CONFIG.get('agent_name', ''),
+            'xray_version': xray_version(),
+            'time': now_iso(),
+        }
+    )
 
 
 if __name__ == '__main__':

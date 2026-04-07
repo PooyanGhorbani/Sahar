@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.17"
+APP_VERSION="0.1.18"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -55,6 +55,20 @@ detect_platform() {
 check_os() {
   detect_platform
   echo "Detected OS family: $OS_FAMILY"
+}
+
+resolve_host_ready() {
+  local host="$1"
+  if command -v getent >/dev/null 2>&1 && getent hosts "$host" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v nslookup >/dev/null 2>&1 && nslookup "$host" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v dig >/dev/null 2>&1 && [[ -n "$(dig +short "$host" | head -n1)" ]]; then
+    return 0
+  fi
+  return 1
 }
 
 install_packages() {
@@ -155,7 +169,7 @@ PY2
         echo "Please create/update the A record first, then run the installer again."
         exit 1
       fi
-      if getent hosts "$LOCAL_PUBLIC_HOST" >/dev/null 2>&1; then
+      if resolve_host_ready "$LOCAL_PUBLIC_HOST"; then
         echo "Domain resolves successfully."
       else
         echo "Warning: domain does not resolve yet."

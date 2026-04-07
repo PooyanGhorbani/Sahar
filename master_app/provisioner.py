@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+DEFAULT_REALITY_SERVER_NAME = 'www.cloudflare.com'
+
 import paramiko
 
 from agent_client import AgentClient
@@ -47,6 +49,8 @@ class SSHProvisioner:
 
         ssh = self._connect(host, ssh_port, ssh_username, ssh_password)
         try:
+            if ssh_username != 'root':
+                self._ensure_sudo_ready(ssh, ssh_password)
             self._run(ssh, f"mkdir -p {shlex.quote(remote_dir)}", ssh_password, use_sudo=ssh_username != 'root')
             remote_bundle = f"{remote_dir}/sahar-agent-bundle.tar.gz"
             sftp = ssh.open_sftp()
@@ -62,6 +66,7 @@ class SSHProvisioner:
                 use_sudo=ssh_username != 'root',
             )
 
+            reality_server_name = host if host_mode == 'domain' else DEFAULT_REALITY_SERVER_NAME
             env = {
                 'NONINTERACTIVE': '1',
                 'PUBLIC_HOST': host,
@@ -69,11 +74,15 @@ class SSHProvisioner:
                 'TRANSPORT_MODE': transport_mode,
                 'AGENT_NAME': server_name,
                 'XRAY_PORT': str(xray_port),
+                'REALITY_PORT': '8443',
                 'XRAY_API_PORT': str(xray_api_port),
                 'AGENT_LISTEN_HOST': '0.0.0.0',
                 'AGENT_LISTEN_PORT': str(agent_listen_port),
                 'ALLOWED_SOURCES': allowed_sources,
                 'AGENT_TOKEN': agent_token,
+                'FINGERPRINT': 'chrome',
+                'REALITY_SERVER_NAME': reality_server_name,
+                'REALITY_DEST': f'{reality_server_name}:443',
             }
             env_prefix = ' '.join(f"{k}={shlex.quote(v)}" for k, v in env.items())
             install_cmd = f"cd {shlex.quote(remote_dir)} && {env_prefix} bash ./install_agent.sh"
@@ -140,6 +149,16 @@ class SSHProvisioner:
             msg = (err or out or f'command failed with exit status {rc}').strip()
             raise ProvisionError(msg)
         return out.strip()
+
+
+    def _ensure_sudo_ready(self, ssh: paramiko.SSHClient, password: str) -> None:
+        try:
+            self._run(ssh, 'true', password, use_sudo=True, timeout=20)
+        except ProvisionError as exc:
+            message = str(exc).lower()
+            if 'sudo' in message and ('not found' in message or 'command not found' in message):
+                raise ProvisionError('remote user is not root and sudo is not installed on the target server') from exc
+            raise ProvisionError('remote user needs working sudo privileges or you must connect as root') from exc
 
     def _wait_for_health(self, client: AgentClient) -> Dict[str, Any]:
         deadline = time.time() + 180

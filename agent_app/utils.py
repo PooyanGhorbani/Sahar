@@ -116,7 +116,10 @@ def source_allowed(remote_ip: str, allowed_sources: Iterable[str]) -> bool:
     allowed = list(allowed_sources)
     if not allowed:
         return True
-    ip_obj = ipaddress.ip_address(remote_ip)
+    try:
+        ip_obj = ipaddress.ip_address((remote_ip or '').strip())
+    except ValueError:
+        return False
     for item in allowed:
         try:
             if '/' in item:

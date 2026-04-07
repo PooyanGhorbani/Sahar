@@ -1,94 +1,130 @@
-# سحر 0.1.17
+# سحر 0.1.18
 
 ![Sahar banner](assets/banner.png)
 
-**سامانه مدیریت Xray / VLESS با پنل تلگرام، مستر و ایجنت**  
+**سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.17-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.18-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)
 
-> **نکته مهم:** این بسته فقط برای **Ubuntu / Debian / Alpine** آماده شده و نصب آن باید با **دسترسی root** انجام شود.
->
-> **Important:** This bundle supports **Ubuntu / Debian / Alpine** only and must be installed with **root** privileges.
+> **نکته مهم:** این پروژه فقط روی **Ubuntu / Debian / Alpine** پشتیبانی می‌شود و نصب باید با **دسترسی root** انجام شود.  
+> **Important:** This project supports **Ubuntu / Debian / Alpine** only and installation must run with **root** privileges.
 
 ---
 
-## معرفی کوتاه | Overview
+## معرفی پروژه | Project overview
 
-**سحر** برای این ساخته شده که مدیریت Xray را از حالت دستی و پراکنده خارج کند و آن را به یک جریان متمرکز تبدیل کند:
+**سحر** برای این ساخته شده که مدیریت Xray را از حالت دستی بیرون بیاورد و آن را به یک جریان متمرکز تبدیل کند.
 
-- **Master** برای مدیریت مرکزی
-- **Agent** برای اجرای عملیات روی هر سرور
-- **Telegram Bot** برای مدیریت روزانه
+اجزای اصلی پروژه:
+- **Master** برای مدیریت مرکزی، دیتابیس، بات و subscription
+- **Agent** برای اعمال تغییرات Xray روی هر VPS
+- **Telegram Bot** برای مدیریت روزمره
 - **Subscription ثابت** برای هر کاربر
-- **Cloudflare DNS Automation** به‌صورت اختیاری
-- **SSH Provisioning** برای نصب Agent از داخل بات
+- **Cloudflare DNS automation** به‌صورت اختیاری
+- **SSH provisioning** برای نصب Agent از داخل بات
 
-در عمل، Master دیتابیس، بات، سرویس subscription و زمان‌بند را اجرا می‌کند و Agent روی هر نود، تغییرات Xray و وضعیت سرویس را مدیریت می‌کند.
+در معماری واقعی پروژه:
+- Master مرکز کنترل است
+- Agent روی هر نود اجرا می‌شود
+- بات تلگرام به Master وصل است
+- هر کاربر یک subscription token ثابت دارد
+- در حالت `dual`، subscription هر دو پروفایل Simple و Reality را برمی‌گرداند
 
 ---
 
-## چیزی که این بسته واقعاً شاملش هست | What is included
+## این بسته شامل چه چیزهایی است؟ | Bundle contents
 
 این فایل ZIP شامل این موارد است:
-
-- `install.sh` برای شروع نصب
-- `install_master.sh` برای نصب Master
-- `install_agent.sh` برای نصب Agent
+- `install.sh` شروع نصب
+- `install_master.sh` نصب Master
+- `install_agent.sh` نصب Agent
 - `master_app/` کدهای Master
 - `agent_app/` کدهای Agent
-- `assets/` تصاویر README
+- `assets/` فایل‌های تصویری README
 - `VERSION` نسخه بسته
-- `PATCH_NOTES.txt` توضیحات تغییرات
+- `PATCH_NOTES.txt` یادداشت تغییرات
 
-**روش درست استفاده از این بسته:**
+---
 
-```bash
-unzip sahar_0.1.17_single_installer_readme_fixed.zip
-cd sahar_0.1.17_single_installer
-sudo sh install.sh
-```
+## نصب از روی فایل ZIP | Install from the ZIP bundle
 
-اگر حالت نصب را در همان ابتدا مشخص کنی:
+اگر همین بسته را دانلود کرده‌ای، روش استاندارد نصب این است:
 
 ```bash
-sudo sh install.sh master
+unzip sahar_0.1.18_single_installer.zip && cd sahar_0.1.18_single_installer && sudo sh install.sh
 ```
 
-یا:
+برای نصب مستقیم Master:
 
 ```bash
-sudo sh install.sh agent
+unzip sahar_0.1.18_single_installer.zip && cd sahar_0.1.18_single_installer && sudo sh install.sh master
 ```
 
-اگر آرگومان ندهی، installer از خودت می‌پرسد که می‌خواهی **Master** نصب شود یا **Agent**.
+برای نصب مستقیم Agent:
+
+```bash
+unzip sahar_0.1.18_single_installer.zip && cd sahar_0.1.18_single_installer && sudo sh install.sh agent
+```
+
+اگر آرگومان ندهی، installer از خودت می‌پرسد که می‌خواهی Master نصب شود یا Agent.
+
+---
+
+## نصب مستقیم از GitHub با یک خط دستور | One-line direct install from GitHub
+
+اگر پروژه را داخل GitHub گذاشته‌ای، می‌توانی بدون دانلود دستی ZIP، مستقیم با یک خط دستور نصبش کنی.
+
+### نصب Master از GitHub
+
+```bash
+curl -fsSL https://github.com/<OWNER>/<REPO>/archive/refs/heads/<BRANCH>.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/<REPO>-<BRANCH> && sudo sh install.sh master
+```
+
+### نصب Agent از GitHub
+
+```bash
+curl -fsSL https://github.com/<OWNER>/<REPO>/archive/refs/heads/<BRANCH>.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/<REPO>-<BRANCH> && sudo sh install.sh agent
+```
+
+### نکته مهم برای README و GitHub
+
+در دو دستور بالا این سه مقدار را با مقدار واقعی ریپوی خودت عوض کن:
+- `<OWNER>` نام اکانت یا سازمان GitHub
+- `<REPO>` نام مخزن
+- `<BRANCH>` نام branch مثل `main`
+
+مثال:
+
+```bash
+curl -fsSL https://github.com/example-org/sahar/archive/refs/heads/main.zip -o /tmp/sahar.zip && rm -rf /tmp/sahar-src && mkdir -p /tmp/sahar-src && unzip -q /tmp/sahar.zip -d /tmp/sahar-src && cd /tmp/sahar-src/sahar-main && sudo sh install.sh master
+```
+
+این روش زمانی مناسب است که بخواهی همیشه آخرین نسخه branch را مستقیم نصب کنی.
 
 ---
 
 ## سیستم‌عامل‌های پشتیبانی‌شده | Supported operating systems
 
-این installer خانواده سیستم‌عامل را به‌صورت خودکار تشخیص می‌دهد:
-
+این installer خانواده سیستم‌عامل را خودکار تشخیص می‌دهد:
 - **Ubuntu / Debian**
 - **Alpine**
 
-پشت صحنه هم از ابزار مناسب همان سیستم استفاده می‌کند:
+همچنین ابزار سرویس مناسب را خودش انتخاب می‌کند:
+- روی Debian/Ubuntu از `systemd`
+- روی Alpine از `OpenRC`
 
-- روی **Debian/Ubuntu** از `apt` و `systemd`
-- روی **Alpine** از `apk` و `OpenRC`
-
-یعنی لازم نیست خودت بین systemd و OpenRC چیزی را دستی تغییر بدهی.
+یعنی لازم نیست برای systemd یا OpenRC چیزی را دستی تغییر بدهی.
 
 ---
 
 ## معماری پروژه | Architecture
 
-### 1) Master
+### Master
 Master این بخش‌ها را اجرا می‌کند:
-
 - Telegram Bot
 - SQLite Database
 - Subscription HTTP Service
@@ -97,58 +133,62 @@ Master این بخش‌ها را اجرا می‌کند:
 - Cloudflare bootstrap/manager
 - SSH Provisioner
 
-Master می‌تواند فقط نقش مدیریتی داشته باشد، یا در زمان نصب به‌صورت اختیاری **Local Node** هم روی همان سرور فعال شود.
+Master می‌تواند فقط نقش مدیریتی داشته باشد یا در زمان نصب، به‌صورت اختیاری Local Node هم روی همان سرور فعال شود.
 
-### 2) Agent
+### Agent
 Agent روی هر VPS اجرا می‌شود و این کارها را انجام می‌دهد:
-
 - مدیریت کاربران Xray
 - فعال/غیرفعال کردن کاربر
 - حذف و اضافه کاربر
-- بازخوانی و ری‌استارت سرویس Xray
-- دریافت آمار مصرف از Xray API
+- بازخوانی و ری‌استارت Xray
+- خواندن آمار مصرف از Xray API
 - گزارش سلامت نود به Master
 
-### 3) پنل تلگرام | Telegram panel
-بات تلگرام برای عملیات روزمره استفاده می‌شود؛ مثل ساخت کاربر، تغییر پلن، مشاهده لینک، ساخت QR، افزودن سرور و بررسی سلامت.
+### پنل تلگرام | Telegram panel
+بات تلگرام برای عملیات روزمره استفاده می‌شود؛ مثل:
+- ساخت کاربر
+- تغییر پلن
+- گرفتن لینک و QR
+- افزودن سرور
+- بررسی سلامت
+- حذف سرور
+- اجرای بعضی عملیات نگهداری
 
 ---
 
 ## پروفایل‌ها و خروجی کاربر | User profiles and output
 
 برای هر کاربر یک **subscription ثابت** ساخته می‌شود. این یعنی:
-
 - لینک subscription کاربر ثابت می‌ماند
 - با اضافه یا حذف شدن سرورها، خود لینک عوض نمی‌شود
-- محتوای subscription به‌روزرسانی می‌شود
+- فقط محتوای subscription به‌روزرسانی می‌شود
 
-پروفایل‌هایی که پروژه برای نودها می‌سازد:
-
-- `VLESS | Reality`
+پروفایل‌هایی که پروژه می‌سازد:
 - `VLESS | Simple`
+- `VLESS | Reality`
 
-در نسخه فعلی، subscription هر دو پروفایل را در اختیار کلاینت قرار می‌دهد.
+در نسخه فعلی:
+- subscription هر دو پروفایل را ارائه می‌کند
+- لینک و QR اصلی در حالت `dual` روی پروفایل Reality قرار می‌گیرند
 
 ---
 
-## نصب سریع | Quick start
+## شروع سریع | Quick start
 
 ### حالت 1: فقط یک VPS داری
-اگر فقط یک سرور داری، معمولاً بهترین حالت این است که **Master** را نصب کنی و در زمان نصب، **Local Node** را هم فعال کنی.
+اگر فقط یک سرور داری، معمولاً بهترین حالت این است که **Master** را نصب کنی و هنگام نصب، **Local Node** را هم فعال کنی.
 
 ```bash
-unzip sahar_0.1.17_single_installer_readme_fixed.zip
-cd sahar_0.1.17_single_installer
-sudo sh install.sh master
+unzip sahar_0.1.18_single_installer.zip && cd sahar_0.1.18_single_installer && sudo sh install.sh master
 ```
 
-در جریان نصب، وقتی این سؤال را دیدی:
+وقتی این سؤال را دیدی:
 
 ```text
 Enable local VPN node on this master server? [Y/n]
 ```
 
-اگر پاسخ `Y` بدهی، همان سرور هم Master می‌شود و هم یک نود محلی خواهد داشت.
+اگر `Y` بدهی، همان سرور هم Master می‌شود و هم Local Node.
 
 ### حالت 2: چند VPS داری
 روی سرور اصلی:
@@ -165,56 +205,173 @@ sudo sh install.sh agent
 
 ---
 
-## در نصب Master چه چیزهایی از شما پرسیده می‌شود؟ | Master installer prompts
+## در نصب Master چه چیزهایی پرسیده می‌شود؟ | Master installer prompts
 
-اسکریپت `install_master.sh` به‌صورت تعاملی این موارد را می‌پرسد:
-
-- `Telegram bot token`
-- `Admin chat IDs`
+`install_master.sh` به‌صورت تعاملی این موارد را می‌پرسد:
+- Telegram bot token
+- Admin chat IDs
 - فاصله اجرای scheduler
 - timeout ارتباط با Agent
-- حد آستانه هشدار زمان و مصرف
+- آستانه هشدار زمان و مصرف
 - تنظیمات backup
-- آدرس عمومی subscription مثل:
-  - `https://sub.example.com`
-  - یا `http://IP:8090`
+- `subscription public base URL`
 - تنظیمات bind سرویس subscription
 - فعال/غیرفعال بودن Cloudflare
-- در صورت فعال بودن Cloudflare:
-  - دامنه
+- اگر Cloudflare فعال باشد:
+  - دامنه اصلی
   - base subdomain
   - API token
 - فعال/غیرفعال بودن Local Node
 - اگر Local Node فعال باشد:
-  - نام سرور
+  - نام نود
   - IP یا دامنه عمومی
   - تنظیمات Reality
-  - پورت‌های Simple / Reality / Xray API / Local Agent
+  - پورت‌ها
+  - توکن Local Agent
 
-**پورت پیش‌فرض subscription روی Master:** `8090`
+**پورت پیش‌فرض Subscription:** `8090`
 
 ---
 
-## در نصب Agent چه چیزهایی از شما پرسیده می‌شود؟ | Agent installer prompts
+## در نصب Agent چه چیزهایی پرسیده می‌شود؟ | Agent installer prompts
 
-اسکریپت `install_agent.sh` این موارد را می‌پرسد:
-
-- نام نمایشی Agent
-- IP یا دامنه عمومی نود
-- تنظیمات `Reality serverName/SNI`
-- تنظیمات `Reality dest`
+`install_agent.sh` این موارد را می‌پرسد:
+- نام Agent
+- IP یا دامنه عمومی
+- `REALITY serverName/SNI`
+- `REALITY dest`
 - fingerprint
-- پورت `VLESS Simple`
-- پورت `VLESS Reality`
-- پورت `Xray API stats`
-- آدرس bind و پورت API ایجنت
+- پورت Simple
+- پورت Reality
+- پورت Xray API
+- آدرس bind و پورت Agent API
 - `Allowed source IPs/CIDRs`
 - `Agent API token`
 
 **پورت پیش‌فرض Agent API:** `8787`  
 **پورت پیش‌فرض Simple:** `443`  
 **پورت پیش‌فرض Reality:** `8443`  
-**پورت پیش‌فرض Xray API stats:** `10085`
+**پورت پیش‌فرض Xray API:** `10085`
+
+---
+
+## افزودن Agent با SSH از داخل بات | SSH provisioning from Telegram
+
+یکی از قابلیت‌های مهم پروژه این است که Master می‌تواند Agent را از داخل بات روی VPS جدید نصب کند.
+
+wizard این اطلاعات را می‌گیرد:
+- نام سرور
+- IP یا دامنه SSH
+- پورت SSH
+- نام کاربری SSH
+- رمز SSH
+
+بعد Master این کارها را انجام می‌دهد:
+- اتصال SSH برقرار می‌کند
+- فایل‌های لازم را به سرور مقصد می‌فرستد
+- نصب Agent را به‌صورت non-interactive اجرا می‌کند
+- health check می‌گیرد
+- سرور را در دیتابیس ثبت می‌کند
+- اگر Cloudflare فعال باشد، رکورد DNS هم می‌سازد
+
+### نکته مهم درباره SSH provisioning
+- اگر با `root` وصل شوی، جریان نصب مستقیم‌تر است
+- اگر با کاربر عادی وصل شوی، آن کاربر باید **sudo فعال و سالم** داشته باشد
+- اگر `sudo` روی سرور مقصد نصب نباشد یا آن یوزر sudoer نباشد، نصب خودکار fail می‌شود
+
+---
+
+## اتصال خودکار سرور به Cloudflare دقیقاً چگونه کار می‌کند؟ | How automatic Cloudflare connection works
+
+این بخش مهم است چون Cloudflare در این پروژه **Tunnel** یا **Proxy کامل** راه‌اندازی نمی‌کند. کاری که انجام می‌دهد **مدیریت رکورد DNS** است.
+
+### پروژه دقیقاً چه کاری می‌کند؟
+اگر Cloudflare را در زمان نصب Master فعال کنی، Master می‌تواند برای هر سروری که اضافه می‌کنی، یک رکورد DNS از نوع `A` داخل همان zone بسازد یا به‌روزرسانی کند.
+
+یعنی اگر این ورودی‌ها را بدهی:
+- دامنه اصلی: `example.com`
+- base subdomain: `vpn`
+- نام سرور: `ir1`
+- IP واقعی سرور: `203.0.113.10`
+
+پروژه رکوردی شبیه این می‌سازد:
+
+```text
+ir1.vpn.example.com -> 203.0.113.10
+```
+
+اگر base subdomain خالی باشد، خروجی این‌طور می‌شود:
+
+```text
+ir1.example.com -> 203.0.113.10
+```
+
+### چه زمانی این اتفاق می‌افتد؟
+Cloudflare automation در این پروژه معمولاً در این نقاط استفاده می‌شود:
+1. هنگام نصب Master، token و zone تنظیم می‌شود
+2. وقتی سرور جدید را با SSH از داخل بات اضافه می‌کنی
+3. وقتی سرور در دیتابیس ثبت شد و IP آن مشخص شد
+4. Master از Cloudflare API رکورد DNS را create/update می‌کند
+5. اگر بعداً سرور را حذف کنی، پروژه تلاش می‌کند رکورد DNS را هم پاک کند
+
+### چه چیزهایی لازم داری؟
+برای اینکه این بخش درست کار کند، باید این پیش‌نیازها را داشته باشی:
+- دامنه‌ات داخل Cloudflare باشد
+- API token معتبر بسازی
+- token حداقل این دسترسی‌ها را داشته باشد:
+  - `Zone Read`
+  - `DNS Write`
+- دامنه‌ای که وارد می‌کنی، همان zone واقعی Cloudflare باشد
+
+### هنگام نصب Master چه چیزهایی وارد می‌کنی؟
+اگر به سؤال زیر جواب `Y` بدهی:
+
+```text
+Enable Cloudflare DNS automation? [Y/n]
+```
+
+installer این موارد را می‌پرسد:
+- `Cloudflare domain name` مثل `example.com`
+- `Base subdomain` مثل `vpn`
+- `Cloudflare API token`
+
+بعد پروژه این اطلاعات را در config نگه می‌دارد و token را به‌صورت رمز‌شده در دیتابیس ذخیره می‌کند.
+
+### بعد از آن هنگام افزودن سرور چه می‌شود؟
+وقتی از داخل بات سرور جدید را اضافه می‌کنی:
+- Agent روی سرور نصب می‌شود
+- سرور health check می‌دهد
+- Master hostname یا IP مقصد SSH را به IP قابل استفاده برای رکورد DNS تبدیل می‌کند
+- Cloudflare API صدا زده می‌شود
+- رکورد DNS برای آن سرور ساخته یا به‌روزرسانی می‌شود
+- نام DNS نهایی داخل دیتابیس سرور ذخیره می‌شود
+- در صورت موفقیت، همان نام DNS می‌تواند به‌عنوان `public_host` سرور استفاده شود
+
+### Cloudflare در این پروژه چه کاری **نمی‌کند**؟
+برای جلوگیری از سوءبرداشت، این موارد را پروژه انجام نمی‌دهد:
+- Cloudflare Tunnel نمی‌سازد
+- WARP نصب نمی‌کند
+- گواهی TLS سمت Cloudflare برای Xray مدیریت نمی‌کند
+- رکوردهای پیچیده غیر از مدیریت DNS مورد نیاز این پروژه را به‌صورت خودکار نمی‌چیند
+- به‌صورت پیش‌فرض رکوردها را **proxied** نمی‌کند؛ خروجی فعلی روی DNS-only است
+
+### اگر Cloudflare روشن باشد، آیا لازم است خودت A record بسازی؟
+- برای **سرورهایی که از داخل بات با SSH اضافه می‌کنی**، معمولاً نه؛ چون خود پروژه رکورد را می‌سازد
+- برای **دامنه‌ای که خودت به‌صورت دستی برای Local Node وارد می‌کنی**، بهتر است از قبل DNS را درست کرده باشی یا حداقل بدانی کجا قرار است اشاره کند
+- برای **subscription_base_url** هم بهتر است آدرس عمومی درست و نهایی را خودت وارد کنی، چون این آدرس همان چیزی است که کاربر دریافت می‌کند
+
+### بهترین الگوی عملی
+یک الگوی تمیز این است:
+- دامنه اصلی: `example.com`
+- base subdomain: `vpn`
+- نام سرورها: `ir1`, `ir2`, `de1`
+
+در این حالت خروجی‌ها می‌شوند:
+- `ir1.vpn.example.com`
+- `ir2.vpn.example.com`
+- `de1.vpn.example.com`
+
+این کار هم مدیریت را تمیزتر می‌کند، هم داخل پنل و subscription نام‌ها قابل فهم‌تر می‌مانند.
 
 ---
 
@@ -229,7 +386,7 @@ systemctl status sahar-master-scheduler
 systemctl status sahar-master-subscription
 ```
 
-اگر Local Node را فعال کرده باشی:
+اگر Local Node فعال باشد:
 
 ```bash
 systemctl status sahar-master-local-agent
@@ -268,115 +425,16 @@ rc-service xray status
 
 ---
 
-## مسیرهای مهم | Important paths
+## نکات امنیتی مهم | Security notes
 
-### Master
-- مسیر اصلی برنامه: `/opt/sahar-master`
-- فایل کانفیگ: `/opt/sahar-master/data/config.json`
-- لاگ‌ها: `/opt/sahar-master/logs/`
-
-### Agent
-- مسیر اصلی برنامه: `/opt/sahar-agent`
-- فایل کانفیگ: `/opt/sahar-agent/data/config.json`
-- لاگ‌ها: `/opt/sahar-agent/logs/`
-
-### Xray
-- فایل کانفیگ: `/usr/local/etc/xray/config.json`
-- لاگ‌ها: `/var/log/xray/`
-
----
-
-## مشاهده لاگ و عیب‌یابی | Logs and troubleshooting
-
-### Debian/Ubuntu
-```bash
-journalctl -u sahar-master-bot -n 100 --no-pager
-journalctl -u sahar-master-scheduler -n 100 --no-pager
-journalctl -u sahar-master-subscription -n 100 --no-pager
-journalctl -u sahar-master-local-agent -n 100 --no-pager
-journalctl -u sahar-agent -n 100 --no-pager
-journalctl -u xray -n 100 --no-pager
-```
-
-### Alpine
-```bash
-tail -n 100 /opt/sahar-master/logs/*.log
-tail -n 100 /opt/sahar-agent/logs/*.log
-tail -n 100 /var/log/xray/*
-```
-
-نکته: اگر Local Node روی Master فعال نشده باشد، طبیعی است که سرویس `sahar-master-local-agent` وجود نداشته باشد.
-
----
-
-## از داخل بات چه کارهایی می‌توانی انجام بدهی؟ | Telegram bot capabilities
-
-مواردی که در کد پروژه برای بات دیده می‌شود:
-
-- ساخت، حذف، فعال و غیرفعال کردن کاربر
-- تغییر زمان و حجم
-- ریست مصرف
-- مشاهده subscription
-- گرفتن لینک یا QR کاربر
-- مدیریت دسترسی کاربر به سرورها
-- افزودن سرور جدید با SSH wizard
-- مشاهده وضعیت سلامت سرورها
-- بررسی خطاهای اخیر
-- مدیریت پلن‌ها
-- مدیریت ادمین‌ها و نقش‌ها
-- گرفتن backup
-
-نقش‌های ادمین در پروژه:
-
-- `owner`
-- `admin`
-- `support`
-- `viewer`
-
-برای بعضی عملیات حساس، بات از **مرحله تأیید** استفاده می‌کند. این مورد به معنی سیستم احراز هویت دومرحله‌ای کامل نیست؛ فقط یک مرحله تأیید برای عملیات مخرب است.
-
----
-
-## افزودن Agent با SSH | SSH provisioning
-
-یکی از قابلیت‌های مهم پروژه این است که Master می‌تواند از داخل بات، Agent را روی VPS جدید نصب کند.
-
-اطلاعاتی که در wizard از شما گرفته می‌شود:
-
-- نام سرور
-- IP یا دامنه SSH
-- پورت SSH
-- نام کاربری SSH
-- رمز SSH
-
-بعد Master این کارها را انجام می‌دهد:
-
-- اتصال SSH برقرار می‌کند
-- فایل‌های پروژه را به سرور مقصد می‌فرستد
-- نصب Agent را اجرا می‌کند
-- health check می‌گیرد
-- سرور را در دیتابیس ثبت می‌کند
-- در صورت فعال بودن Cloudflare، رکورد DNS را هم می‌سازد
-
----
-
-## Cloudflare به چه شکل کار می‌کند؟ | Cloudflare automation
-
-اگر Cloudflare را هنگام نصب Master فعال کنی، پروژه می‌تواند برای نودها رکورد DNS بسازد.
-
-ورودی‌های اصلی:
-
-- دامنه اصلی، مثلاً `example.com`
-- base subdomain اختیاری، مثلاً `vpn`
-- نام سرور، مثلاً `ir1`
-
-نمونه خروجی:
-
-```text
-ir1.vpn.example.com
-```
-
-اگر بعداً سرور از سیستم حذف شود، پروژه تلاش می‌کند رکورد DNS مربوط به آن را هم پاک کند.
+- برای Cloudflare فقط دسترسی‌های لازم را بده:
+  - `Zone Read`
+  - `DNS Write`
+- برای Agent بهتر است `Allowed source IPs/CIDRs` را روی IP مستر تنظیم کنی، نه روی حالت باز
+- توکن Agent را طولانی و تصادفی نگه دار
+- اگر با SSH provisioning کار می‌کنی، ترجیحاً با root وصل شو یا مطمئن شو sudo آماده است
+- اگر از دامنه استفاده می‌کنی، قبل از ادامه نصب مطمئن شو DNS درست resolve می‌شود
+- بهتر است `subscription_base_url` را خالی نگذاری و آدرس نهایی عمومی را وارد کنی
 
 ---
 
@@ -398,23 +456,6 @@ ir1.vpn.example.com
 - 10 GB SSD
 
 این اعداد توصیه عملی هستند، نه محدودیت سخت کد.
-
----
-
-## نکات امنیتی مهم | Security notes
-
-- برای Cloudflare فقط دسترسی‌های لازم را بده:
-  - `Zone Read`
-  - `DNS Write`
-- برای Agent بهتر است `Allowed source IPs/CIDRs` را روی IP مستر تنظیم کنی، نه روی حالت باز
-- توکن Agent را طولانی و تصادفی نگه دار
-- بعد از نصب، وضعیت این سرویس‌ها را چک کن:
-  - `sahar-master-bot`
-  - `sahar-master-scheduler`
-  - `sahar-master-subscription`
-  - `sahar-agent`
-  - `xray`
-- اگر از دامنه استفاده می‌کنی، قبل از ادامه نصب مطمئن شو A record درست به IP سرور اشاره می‌کند
 
 ---
 
@@ -467,39 +508,3 @@ PATCH_NOTES.txt
 <p align="center">
   <img src="assets/agent-install.png" alt="Agent install" width="85%">
 </p>
-
----
-
-## خلاصه انگلیسی | English summary
-
-Sahar is a Telegram-first Xray/VLESS management bundle with a master-agent design.
-
-- Use `install.sh` to start.
-- Install `master` on the main server.
-- Install `agent` on extra nodes.
-- Supported OS families: Debian/Ubuntu and Alpine.
-- Master runs bot, scheduler, subscription service and optional local node.
-- Agent exposes an API for Xray operations and node health checks.
-- Cloudflare DNS automation is optional.
-- SSH provisioning from the Telegram bot is supported.
-
-Quick commands:
-
-```bash
-sudo sh install.sh master
-sudo sh install.sh agent
-```
-
----
-
-## جمع‌بندی | Final note
-
-اگر بخواهی خیلی خلاصه شروع کنی:
-
-1. فایل را روی سرور باز کن
-2. وارد پوشه پروژه شو
-3. `install.sh` را اجرا کن
-4. برای سرور اصلی `master` بزن
-5. برای نودهای اضافه `agent` بزن
-
-اگر فقط یک سرور داری، معمولاً نصب **Master + Local Node** بهترین انتخاب است.

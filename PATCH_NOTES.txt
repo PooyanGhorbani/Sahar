@@ -1,13 +1,11 @@
-Sahar 0.1.17 release bundle
+Sahar 0.1.18 release bundle
 
-Applied fixes:
-- Added OpenRC-aware service management for agent and master health/status checks.
-- Fixed Alpine local-node Xray installation path in install_master.sh.
-- Made primary VLESS link/QR prefer Reality when transport_mode=dual and Reality data exists.
-- Hardened agent installer and SSH provisioner to prefer restricted allowed_sources values.
-- Updated README examples to use the unified install.sh entrypoint and current bundle name.
-
-Validation performed:
-- Python syntax compilation for all Python modules.
-- Bash syntax check for install.sh, install_master.sh, install_agent.sh.
-- Smoke tests for VLESS link generation and provisioning IP restriction helper.
+Changes in this build:
+- fixed SSH agent provisioning for non-interactive installs by supplying safe Reality defaults
+- added clearer privilege checks for remote SSH provisioning when sudo is required
+- improved subscription URL fallback to avoid unusable 0.0.0.0 links
+- expanded control-panel status to include subscription and local-agent services
+- hardened agent source-IP validation against malformed remote addresses
+- improved agent version endpoint output
+- improved domain resolution checks in installers for Alpine and Debian-based systems
+- refreshed README with one-line GitHub install guidance and fuller Cloudflare automation docs

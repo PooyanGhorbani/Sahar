@@ -256,6 +256,11 @@ def status_text() -> str:
     healthy_servers = sum(1 for s in servers if s.get('enabled') and (s.get('last_health_status') or '') == 'ok')
     bot_state = 'active' if systemctl_is_active('sahar-master-bot') else 'inactive'
     scheduler_state = 'active' if systemctl_is_active('sahar-master-scheduler') else 'inactive'
+    subscription_state = 'active' if systemctl_is_active('sahar-master-subscription') else 'inactive'
+    if config.get('local_node_enabled'):
+        local_agent_state = 'active' if systemctl_is_active('sahar-master-local-agent') else 'inactive'
+    else:
+        local_agent_state = 'disabled'
     return "\n".join([
         '<b>Sahar Control Panel</b>',
         '',
@@ -263,6 +268,8 @@ def status_text() -> str:
         f'🌐 Servers: {len(servers)} | Healthy: {healthy_servers}',
         f'🤖 Bot: {bot_state}',
         f'⏱ Scheduler: {scheduler_state}',
+        f'🔗 Subscription: {subscription_state}',
+        f'🛰 Local Agent: {local_agent_state}',
         f'📦 Version: {config.get("package_version") or "-"}',
     ])
 
@@ -414,15 +421,28 @@ def cleanup_quota_once() -> int:
     return disable_quota_once()
 
 
+def _detect_public_ipv4() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(('8.8.8.8', 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return ''
+
+
+
 def subscription_url_for_user(username: str) -> str:
     token = DB.get_subscription_token(username)
     if not token:
         token = DB.ensure_subscription_token(username, secrets.token_urlsafe(24), now_iso())
     base = (config.get('subscription_base_url') or '').rstrip('/')
     if not base:
-        bind_host = config.get('subscription_bind_host') or '127.0.0.1'
+        bind_host = str(config.get('subscription_bind_host') or '127.0.0.1').strip()
         bind_port = config.get('subscription_bind_port') or 8080
-        base = f'http://{bind_host}:{bind_port}'
+        host = bind_host
+        if bind_host in {'0.0.0.0', '::', '', '127.0.0.1', 'localhost'}:
+            host = _detect_public_ipv4() or bind_host
+        base = f'http://{host}:{bind_port}'
     return f'{base}/sub/{token}'
 
 

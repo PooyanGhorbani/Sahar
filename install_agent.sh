@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.17"
+APP_VERSION="0.1.18"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -72,6 +72,20 @@ normalize_allowed_sources() {
   fi
 }
 
+resolve_host_ready() {
+  local host="$1"
+  if command -v getent >/dev/null 2>&1 && getent hosts "$host" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v nslookup >/dev/null 2>&1 && nslookup "$host" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v dig >/dev/null 2>&1 && [[ -n "$(dig +short "$host" | head -n1)" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 install_packages() {
   if [[ "$OS_FAMILY" == "debian" ]]; then
     apt update
@@ -95,8 +109,8 @@ load_noninteractive_env() {
   HOST_MODE="${HOST_MODE:-$(infer_host_mode "${PUBLIC_HOST:-}")}"
   TRANSPORT_MODE="dual"
   FINGERPRINT="${FINGERPRINT:-chrome}"
-  REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-}"
-  REALITY_DEST="${REALITY_DEST:-}"
+  REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.cloudflare.com}"
+  REALITY_DEST="${REALITY_DEST:-${REALITY_SERVER_NAME}:443}"
   AGENT_NAME="${AGENT_NAME:-agent-node}"
   XRAY_PORT="${XRAY_PORT:-443}"
   REALITY_PORT="${REALITY_PORT:-8443}"
@@ -134,7 +148,7 @@ ask_host_mode() {
       echo "Please create/update the A record first, then run the installer again."
       exit 1
     fi
-    if getent hosts "$PUBLIC_HOST" >/dev/null 2>&1; then
+    if resolve_host_ready "$PUBLIC_HOST"; then
       echo "Domain resolves successfully."
     else
       echo "Warning: domain does not resolve yet."
@@ -285,7 +299,8 @@ write_config() {
   "xray_access_log": "/var/log/xray/access.log",
   "xray_error_log": "/var/log/xray/error.log",
   "rate_limit_window_seconds": 60,
-  "rate_limit_max_requests": 120
+  "rate_limit_max_requests": 120,
+  "package_version": "$APP_VERSION"
 }
 JSON
   chmod 600 "$APP_DATA_DIR/config.json"
