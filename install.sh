@@ -8,7 +8,7 @@ OS_PRETTY_NAME=""
 OS_FAMILY=""
 INIT_SYSTEM=""
 LOG_FILE="/tmp/sahar-bootstrap-installer.log"
-TOTAL_STEPS=3
+TOTAL_STEPS=2
 CURRENT_STEP=0
 BAR_WIDTH=34
 CURRENT_LABEL="Preparing bootstrap"
@@ -16,6 +16,7 @@ CURRENT_STATUS="Waiting"
 CURRENT_SPINNER="-"
 SPINNER_INDEX=0
 UI_TTY=0
+FAIL_HINT=""
 C_RESET=""
 C_BOLD=""
 C_DIM=""
@@ -119,7 +120,7 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3s%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sBootstrap only prepares git, curl, unzip, certificates, and hands off quietly.%s
+  printf '%sBootstrap checks the system quickly, installs only missing base tools, then hands off.%s
 ' "$C_YELLOW" "$C_RESET"
 }
 
@@ -134,6 +135,10 @@ fail_install() {
 ' "$C_RED" "$C_RESET" >&2
   printf 'Step: %s
 ' "$1" >&2
+  if [ -n "$FAIL_HINT" ]; then
+    printf 'Reason: %s
+' "$FAIL_HINT" >&2
+  fi
   printf 'Details: %s
 ' "$LOG_FILE" >&2
   if [ -s "$LOG_FILE" ]; then
@@ -156,10 +161,37 @@ spinner_loop() {
   done
 }
 
+
+set_fail_hint() {
+  FAIL_HINT="$1"
+}
+
+clear_fail_hint() {
+  FAIL_HINT=""
+}
+
+run_with_timeout() {
+  timeout_s="$1"
+  shift
+  if command_exists timeout; then
+    if ! timeout "$timeout_s" "$@"; then
+      rc=$?
+      if [ "$rc" -eq 124 ]; then
+        set_fail_hint "Timed out after ${timeout_s}s"
+        printf 'timeout after %ss: %s\n' "$timeout_s" "$*" >> "$LOG_FILE"
+      fi
+      return "$rc"
+    fi
+    return 0
+  fi
+  "$@"
+}
+
 run_step() {
   label="$1"
   shift
   CURRENT_LABEL="$label"
+  clear_fail_hint
   if [ "$UI_TTY" -eq 1 ]; then
     spinner_loop &
     spinner_pid=$!
@@ -252,19 +284,26 @@ preflight_bootstrap() {
 }
 
 run_bootstrap_preflight() {
-  bootstrap_tools_missing || true
+  if bootstrap_tools_missing; then
+    printf 'base tools missing
+' >> "$LOG_FILE"
+  else
+    printf 'base tools already available
+' >> "$LOG_FILE"
+  fi
 }
 
 ensure_bootstrap_packages() {
   if ! bootstrap_tools_missing; then
+    printf 'bootstrap tools already present\n' >> "$LOG_FILE"
     return 0
   fi
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y bash curl unzip ca-certificates git
+    run_with_timeout 180 apt-get update
+    run_with_timeout 300 apt-get install -y bash curl unzip ca-certificates git
   else
-    apk add --no-cache bash curl unzip ca-certificates git
+    run_with_timeout 240 apk add --no-cache bash curl unzip ca-certificates git
   fi
 }
 
@@ -287,7 +326,7 @@ setup_ui
 print_banner
 require_root
 run_step "Checking system" preflight_bootstrap
-run_step "Running preflight checks" run_bootstrap_preflight
+run_bootstrap_preflight
 run_step "Preparing bootstrap tools" ensure_bootstrap_packages
 CURRENT_STEP=$TOTAL_STEPS
 CURRENT_LABEL="Handing off to ${MODE} installer"

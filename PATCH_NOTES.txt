@@ -1,4 +1,4 @@
-Sahar 0.1.49
+Sahar 0.1.50
 
 - Improved installer feedback during the Python environment stage so the screen now shows whether it is preparing a venv, refreshing pip tooling, building wheels, using cached wheels, installing from the cached wheelhouse, or reusing the cached Python environment.
 - Added per-step live status notes to the master and agent installers so long-running hidden package work no longer looks frozen.
@@ -8,3 +8,8 @@ Sahar 0.1.48
 - Added bootstrap preflight so the top-level installer can skip package manager work when the required bootstrap tools already exist.
 - Added shared pip cache and per-app wheelhouse caches for faster reinstall and upgrade runs on the same server.
 - Saved and reused the Telegram bot token automatically from /etc/sahar/master.env so later installs do not ask again unless needed.
+## 0.1.51
+- Added real timeout handling and fail-fast messages for slow installer stages.
+- Added timeouts to bootstrap package install, system package install, pip tooling, wheel build, wheel install, and Xray install/download paths.
+- Installer failure output now shows a timeout reason when a stage exceeds its limit.
+

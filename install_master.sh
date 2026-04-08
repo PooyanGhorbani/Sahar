@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.49"
+APP_VERSION="0.1.51"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -36,6 +36,7 @@ CURRENT_STATUS="Waiting"
 CURRENT_SPINNER="-"
 SPINNER_INDEX=0
 UI_TTY=0
+FAIL_HINT=""
 C_RESET=""
 C_BOLD=""
 C_DIM=""
@@ -161,10 +162,37 @@ spinner_loop() {
   done
 }
 
+
+set_fail_hint() {
+  FAIL_HINT="$1"
+}
+
+clear_fail_hint() {
+  FAIL_HINT=""
+}
+
+run_with_timeout() {
+  local timeout_s="$1" rc
+  shift
+  if command_exists timeout; then
+    if ! timeout --foreground "$timeout_s" "$@"; then
+      rc=$?
+      if [[ "$rc" -eq 124 ]]; then
+        set_fail_hint "Timed out after ${timeout_s}s"
+        printf 'timeout after %ss: %s\n' "$timeout_s" "$*" >> "$LOG_FILE"
+      fi
+      return "$rc"
+    fi
+    return 0
+  fi
+  "$@"
+}
+
 run_step() {
   local label="$1" spinner_pid
   shift
   CURRENT_LABEL="$label"
+  clear_fail_hint
   : > "$STATUS_FILE"
   if (( UI_TTY )); then
     spinner_loop &
@@ -198,6 +226,10 @@ ui_fail() {
 ' "$C_RED" "$C_RESET" >&2
   printf 'Step: %s
 ' "$label" >&2
+  if [[ -n "$FAIL_HINT" ]]; then
+    printf 'Reason: %s
+' "$FAIL_HINT" >&2
+  fi
   printf 'Details: %s
 ' "$LOG_FILE" >&2
   if [[ -s "$LOG_FILE" ]]; then
@@ -328,8 +360,8 @@ install_packages() {
     if [[ $need_install -eq 0 ]]; then
       return 0
     fi
-    apt update
-    apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git
+    run_with_timeout 300 apt update
+    run_with_timeout 900 apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git
   else
     for cmd in python3 pip3 curl unzip jq git gcc; do
       if ! command_exists "$cmd"; then
@@ -340,7 +372,7 @@ install_packages() {
     if [[ $need_install -eq 0 ]]; then
       return 0
     fi
-    apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git
+    run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git
   fi
 }
 
@@ -659,12 +691,12 @@ setup_venv() {
   state_file="$INSTALLER_STATE_DIR/master-requirements.sha256"
   wheel_state_file="$INSTALLER_STATE_DIR/master-wheelhouse.sha256"
   status_note "Preparing virtual environment"
-  if ! python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
+  if ! run_with_timeout 180 python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
     if command -v virtualenv >/dev/null 2>&1; then
-      virtualenv "$VENV_DIR"
+      run_with_timeout 180 virtualenv "$VENV_DIR"
     else
-      python3 -m ensurepip --upgrade || true
-      python3 -m venv "$VENV_DIR"
+      run_with_timeout 180 python3 -m ensurepip --upgrade || true
+      run_with_timeout 180 python3 -m venv "$VENV_DIR"
     fi
   fi
   req_hash="$(file_sha256 "$APP_APP_DIR/requirements.txt")"
@@ -676,7 +708,7 @@ setup_venv() {
   fi
   export PIP_CACHE_DIR
   status_note "Refreshing pip tooling"
-  "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
+  run_with_timeout 600 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
   wheel_state=""
   if [[ -f "$wheel_state_file" ]]; then
     wheel_state="$(cat "$wheel_state_file")"
@@ -685,14 +717,14 @@ setup_venv() {
     status_note "Building wheels for Python packages"
     rm -rf "$WHEELHOUSE_DIR"
     mkdir -p "$WHEELHOUSE_DIR"
-    "$VENV_DIR/bin/pip" wheel -r "$APP_APP_DIR/requirements.txt" --wheel-dir "$WHEELHOUSE_DIR"
+    run_with_timeout 2400 "$VENV_DIR/bin/pip" wheel -r "$APP_APP_DIR/requirements.txt" --wheel-dir "$WHEELHOUSE_DIR"
     printf '%s
 ' "$expected_wheel_state" > "$wheel_state_file"
   else
     status_note "Using cached wheels"
   fi
   status_note "Installing from cached wheelhouse"
-  "$VENV_DIR/bin/pip" install --no-index --find-links "$WHEELHOUSE_DIR" -r "$APP_APP_DIR/requirements.txt"
+  run_with_timeout 1800 "$VENV_DIR/bin/pip" install --no-index --find-links "$WHEELHOUSE_DIR" -r "$APP_APP_DIR/requirements.txt"
   printf '%s
 ' "$expected_wheel_state" > "$state_file"
 }
@@ -912,7 +944,7 @@ download_xray_release_zip() {
   ua="SaharInstaller/0.1.48"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
-  if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
+  if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$latest_url" -o "$output_zip"; then
     return 0
   fi
 
@@ -921,7 +953,7 @@ download_xray_release_zip() {
   tag="${tag%%[/?#]*}"
   if [[ -n "$tag" && "$tag" != "$resolved_url" ]]; then
     tagged_url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
-    if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$tagged_url" -o "$output_zip"; then
+    if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$tagged_url" -o "$output_zip"; then
       return 0
     fi
   fi
@@ -980,7 +1012,7 @@ install_xray_if_needed() {
     fi
     echo "Installing Xray..."
     if [[ "$OS_FAMILY" == "debian" ]]; then
-      bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
+      run_with_timeout 900 bash -c "$(curl -L --connect-timeout 15 --max-time 120 https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
     else
       install_xray_alpine
     fi
@@ -1003,7 +1035,7 @@ enable_services() {
       systemctl enable xray --now
       systemctl enable "$LOCAL_AGENT_SERVICE_NAME" --now
       for _ in $(seq 1 20); do
-        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+        if curl -fsS --connect-timeout 5 --max-time 15 -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS --connect-timeout 5 --max-time 15 -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
           break
         fi
         sleep 2
@@ -1029,7 +1061,7 @@ enable_services() {
       rc-update add "$LOCAL_AGENT_SERVICE_NAME" default
       rc-service "$LOCAL_AGENT_SERVICE_NAME" start
       for _ in $(seq 1 20); do
-        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+        if curl -fsS --connect-timeout 5 --max-time 15 -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS --connect-timeout 5 --max-time 15 -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
           break
         fi
         sleep 2
