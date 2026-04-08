@@ -1,8 +1,10 @@
-Sahar 0.1.28
+Sahar 0.1.29
 
 - Master installer now asks for BOT_TOKEN at the beginning of installation when running interactively.
 - Telegram BOT_TOKEN validation now happens before long package installation steps.
 - First private Telegram chat still auto-bootstraps as owner when no admins exist.
-- Version strings updated to 0.1.28.
+- Version strings updated to 0.1.29.
 - BOT_TOKEN validation no longer depends on python3 during early install.
 - Master install validates the Telegram token with curl-only parsing so Alpine bootstrap works before python packages are installed.
+
+- Fixed concurrent default plan seeding in master_app/db.py so bot/subscription do not crash with SQLITE UNIQUE constraint on plans.key.

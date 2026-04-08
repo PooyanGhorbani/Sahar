@@ -231,9 +231,6 @@ class Database:
             conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
 
     def _seed_default_plans(self, conn: sqlite3.Connection) -> None:
-        count = conn.execute('SELECT COUNT(*) AS c FROM plans').fetchone()['c']
-        if int(count) > 0:
-            return
         now = '1970-01-01T00:00:00'
         rows = [
             ('starter', '🌱 استارتر — 10GB / 7 روز', 10, 7, 'Starter preset', 1, 10, now, now),
@@ -244,7 +241,18 @@ class Database:
             ('unlimited', '♾ نامحدود — 9999GB / 30 روز', 9999, 30, 'Unlimited-like preset', 1, 60, now, now),
         ]
         conn.executemany(
-            'INSERT INTO plans (key, label, traffic_gb, days, notes, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            '''
+            INSERT INTO plans (key, label, traffic_gb, days, notes, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                label=excluded.label,
+                traffic_gb=excluded.traffic_gb,
+                days=excluded.days,
+                notes=excluded.notes,
+                enabled=excluded.enabled,
+                sort_order=excluded.sort_order,
+                updated_at=excluded.updated_at
+            ''',
             rows,
         )
 
