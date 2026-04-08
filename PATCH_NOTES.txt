@@ -1,18 +1,5 @@
-0.1.24
-- Fixed Alpine/Debian service account creation for sahar-master by creating an explicit service group before chown/systemd setup.
-- Prevented install failure at chown: unknown user/group sahar-master:sahar-master.
+Sahar 0.1.26
 
-0.1.23
-- installer no longer asks interactive questions; defaults are applied automatically with optional env overrides
-- install.sh defaults to master mode when no argument is provided and auto-installs git in bootstrap packages
-- master installer now starts Telegram services only when BOT_TOKEN is provided
-- first private chat can auto-bootstrap itself as owner when no admins are preconfigured
-- agent installer now auto-detects public host and allowed source where possible
-- README updated for non-interactive install flow and env-based examples
-
-Sahar 0.1.22
-
-- installer: fixed Alpine Xray download flow to avoid GitHub API 403/JSON parse failure
-- installer: added robust fallback download logic for Xray release archives on Alpine
-- installer: now fails with a clear Xray download error message instead of a Python traceback
-- installer: corrected internal version file to 0.1.22
+- Master installer now validates BOT_TOKEN automatically against the Telegram getMe API before continuing.
+- Installer stops early with a clear error if the bot token is invalid or Telegram API cannot be reached.
+- Version strings were synchronized across the bundle.

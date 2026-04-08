@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.24"
+APP_VERSION="0.1.26"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -252,8 +252,85 @@ telegram_bot_enabled() {
   [[ -n "${BOT_TOKEN:-}" ]]
 }
 
+prompt_for_bot_token() {
+  if [[ -n "${BOT_TOKEN:-}" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+  echo
+  echo "Telegram bot token is not set."
+  echo "Paste the bot token now. Leave empty to skip bot startup for now."
+  read -r -p "BOT_TOKEN: " BOT_TOKEN_INPUT || true
+  BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+}
+
+validate_bot_token() {
+  local payload response http_code summary
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  echo "Validating Telegram bot token..."
+  payload="$(curl -sS --connect-timeout 10 --max-time 20 -w $'
+%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
+  if [[ -z "$payload" ]]; then
+    echo "ERROR: Could not reach the Telegram API to validate BOT_TOKEN."
+    echo "Check outbound network access to api.telegram.org or rerun later."
+    exit 1
+  fi
+
+  http_code="${payload##*$'
+'}"
+  response="${payload%$'
+'*}"
+  if [[ -z "$response" ]]; then
+    echo "ERROR: Telegram API returned an empty response while validating BOT_TOKEN."
+    exit 1
+  fi
+
+  if ! summary="$(HTTP_CODE="$http_code" RESPONSE_JSON="$response" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get('RESPONSE_JSON', '')
+http_code = os.environ.get('HTTP_CODE', '')
+try:
+    data = json.loads(raw)
+except Exception:
+    print('ERROR: Telegram API returned invalid JSON while validating BOT_TOKEN.', file=sys.stderr)
+    sys.exit(1)
+
+if not data.get('ok'):
+    desc = (data.get('description') or 'unknown Telegram API error').strip()
+    code = data.get('error_code') or http_code or 'unknown'
+    print(f'ERROR: BOT_TOKEN validation failed ({code}): {desc}', file=sys.stderr)
+    sys.exit(1)
+
+result = data.get('result') or {}
+username = (result.get('username') or '').strip()
+first_name = (result.get('first_name') or '').strip()
+if username:
+    print(f'Validated bot: @{username}')
+elif first_name:
+    print(f'Validated bot: {first_name}')
+else:
+    print('Validated bot token successfully.')
+PY
+)"; then
+    exit 1
+  fi
+
+  echo "$summary"
+}
+
 ask_config() {
   init_config_defaults
+  ADMIN_CHAT_IDS=""
+  prompt_for_bot_token
+  validate_bot_token
 }
 
 prepare_dirs() {
@@ -269,7 +346,7 @@ write_config() {
   cat > "$APP_DATA_DIR/config.json" <<JSON
 {
   "bot_token": "$BOT_TOKEN",
-  "admin_chat_ids": "$ADMIN_CHAT_IDS",
+  "admin_chat_ids": "",
   "database_path": "$APP_DATA_DIR/master.db",
   "log_path": "$APP_LOG_DIR/master.log",
   "qr_dir": "$APP_QR_DIR",
@@ -561,7 +638,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.23"
+  ua="SaharInstaller/0.1.26"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -723,7 +800,8 @@ print_done() {
   fi
   echo "Subscription base URL: $SUBSCRIPTION_BASE_URL"
   if telegram_bot_enabled; then
-    echo "Start in Telegram with /help"
+    echo "Send /start to the bot from a private chat."
+    echo "The first private chat that reaches the bot becomes the owner automatically."
   else
     echo "Telegram bot service was not started because BOT_TOKEN is empty."
     echo "Set BOT_TOKEN in $APP_DATA_DIR/config.json or reinstall with BOT_TOKEN=..."
