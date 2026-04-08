@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.27"
+APP_VERSION="0.1.28"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -267,63 +267,44 @@ prompt_for_bot_token() {
 }
 
 validate_bot_token() {
-  local payload response http_code summary
+  local payload response http_code description error_code username first_name
   if [[ -z "${BOT_TOKEN:-}" ]]; then
     return 0
   fi
 
   echo "Validating Telegram bot token..."
-  payload="$(curl -sS --connect-timeout 10 --max-time 20 -w $'
-%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
+  payload="$(curl -sS --connect-timeout 10 --max-time 20 -w $'\n%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
   if [[ -z "$payload" ]]; then
     echo "ERROR: Could not reach the Telegram API to validate BOT_TOKEN."
     echo "Check outbound network access to api.telegram.org or rerun later."
     exit 1
   fi
 
-  http_code="${payload##*$'
-'}"
-  response="${payload%$'
-'*}"
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
   if [[ -z "$response" ]]; then
     echo "ERROR: Telegram API returned an empty response while validating BOT_TOKEN."
     exit 1
   fi
 
-  if ! summary="$(HTTP_CODE="$http_code" RESPONSE_JSON="$response" python3 - <<'PY'
-import json
-import os
-import sys
-
-raw = os.environ.get('RESPONSE_JSON', '')
-http_code = os.environ.get('HTTP_CODE', '')
-try:
-    data = json.loads(raw)
-except Exception:
-    print('ERROR: Telegram API returned invalid JSON while validating BOT_TOKEN.', file=sys.stderr)
-    sys.exit(1)
-
-if not data.get('ok'):
-    desc = (data.get('description') or 'unknown Telegram API error').strip()
-    code = data.get('error_code') or http_code or 'unknown'
-    print(f'ERROR: BOT_TOKEN validation failed ({code}): {desc}', file=sys.stderr)
-    sys.exit(1)
-
-result = data.get('result') or {}
-username = (result.get('username') or '').strip()
-first_name = (result.get('first_name') or '').strip()
-if username:
-    print(f'Validated bot: @{username}')
-elif first_name:
-    print(f'Validated bot: {first_name}')
-else:
-    print('Validated bot token successfully.')
-PY
-)"; then
+  if ! printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    description="$(printf '%s' "$response" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    error_code="$(printf '%s' "$response" | sed -n 's/.*"error_code"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+    description="${description:-unknown Telegram API error}"
+    error_code="${error_code:-${http_code:-unknown}}"
+    echo "ERROR: BOT_TOKEN validation failed (${error_code}): ${description}"
     exit 1
   fi
 
-  echo "$summary"
+  username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -n "$username" ]]; then
+    echo "Validated bot: @${username}"
+  elif [[ -n "$first_name" ]]; then
+    echo "Validated bot: ${first_name}"
+  else
+    echo "Validated bot token successfully."
+  fi
 }
 
 collect_bot_token_early() {
@@ -642,7 +623,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.27"
+  ua="SaharInstaller/0.1.28"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
