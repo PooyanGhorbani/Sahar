@@ -2141,10 +2141,13 @@ def main() -> None:
     if 'dns_refresh_server_cmd' in globals():
         application.add_handler(CommandHandler('dns_refresh_server', dns_refresh_server_cmd))
     else:
-        logger.warning('dns_refresh_server_cmd is not defined; skipping handler registration')
+        LOGGER.warning('dns_refresh_server_cmd is not defined; skipping handler registration')
     application.add_handler(CommandHandler('list_servers', list_servers_cmd))
     application.add_handler(CommandHandler('server_health', server_health_cmd))
-    application.add_handler(CommandHandler('server_profiles', server_profiles_cmd))
+    if 'server_profiles_cmd' in globals():
+        application.add_handler(CommandHandler('server_profiles', server_profiles_cmd))
+    else:
+        LOGGER.warning('server_profiles_cmd is not defined; skipping handler registration')
     application.add_handler(CommandHandler('new_user', new_user_cmd))
     application.add_handler(CommandHandler('subscription', subscription_cmd))
     application.add_handler(CommandHandler('set_access_all', set_access_all_cmd))
