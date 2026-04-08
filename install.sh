@@ -57,7 +57,15 @@ advance_spinner() {
 }
 
 progress_bar() {
-  done_slots=$((CURRENT_STEP * BAR_WIDTH / TOTAL_STEPS))
+  display_step=$CURRENT_STEP
+  case "$CURRENT_STATUS" in
+    Running*)
+      if [ "$display_step" -lt "$TOTAL_STEPS" ]; then
+        display_step=$((display_step + 1))
+      fi
+      ;;
+  esac
+  done_slots=$((display_step * BAR_WIDTH / TOTAL_STEPS))
   pending_slots=$((BAR_WIDTH - done_slots))
   fill=$(printf '%*s' "$done_slots" '')
   fill=$(printf '%s' "$fill" | tr ' ' '=')
@@ -74,7 +82,15 @@ draw_screen() {
   if [ "$UI_TTY" -ne 1 ]; then
     return 0
   fi
-  percent=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+  display_step=$CURRENT_STEP
+  case "$CURRENT_STATUS" in
+    Running*)
+      if [ "$display_step" -lt "$TOTAL_STEPS" ]; then
+        display_step=$((display_step + 1))
+      fi
+      ;;
+  esac
+  percent=$((display_step * 100 / TOTAL_STEPS))
   step_no=$((CURRENT_STEP + 1))
   if [ "$step_no" -gt "$TOTAL_STEPS" ]; then
     step_no=$TOTAL_STEPS
@@ -247,7 +263,15 @@ run_mode() {
 setup_ui
 print_banner
 require_root
-run_step "Checking system" detect_os
+CURRENT_LABEL="Checking system"
+CURRENT_STATUS="Running"
+draw_screen
+if ! detect_os >>"$LOG_FILE" 2>&1; then
+  fail_install "Checking system"
+fi
+CURRENT_STEP=1
+CURRENT_STATUS="Completed"
+draw_screen
 run_step "Preparing bootstrap tools" ensure_bootstrap_packages
 CURRENT_STEP=$TOTAL_STEPS
 CURRENT_LABEL="Handing off to ${MODE} installer"
