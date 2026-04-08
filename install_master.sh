@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.32"
+APP_VERSION="0.1.33"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -36,6 +36,11 @@ C_GREEN=""
 C_CYAN=""
 C_YELLOW=""
 C_RED=""
+OS_ID=""
+OS_VERSION_ID=""
+OS_PRETTY_NAME=""
+OS_FAMILY=""
+INIT_SYSTEM=""
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -120,24 +125,32 @@ ui_newline() {
 '
 }
 
+spinner_loop() {
+  local start_ts elapsed
+  start_ts=$(date +%s)
+  while true; do
+    elapsed=$(( $(date +%s) - start_ts ))
+    advance_spinner
+    CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
+    draw_screen
+    sleep 0.12
+  done
+}
+
 run_step() {
-  local label="$1" pid start_ts elapsed
+  local label="$1" spinner_pid
   shift
   CURRENT_LABEL="$label"
   if (( UI_TTY )); then
-    "$@" >>"$LOG_FILE" 2>&1 &
-    pid=$!
-    start_ts=$(date +%s)
-    while kill -0 "$pid" 2>/dev/null; do
-      elapsed=$(( $(date +%s) - start_ts ))
-      advance_spinner
-      CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
-      draw_screen
-      sleep 0.12
-    done
-    if ! wait "$pid"; then
+    spinner_loop &
+    spinner_pid=$!
+    if ! "$@" >>"$LOG_FILE" 2>&1; then
+      kill "$spinner_pid" 2>/dev/null || true
+      wait "$spinner_pid" 2>/dev/null || true
       ui_fail "$label"
     fi
+    kill "$spinner_pid" 2>/dev/null || true
+    wait "$spinner_pid" 2>/dev/null || true
   else
     printf '[%d/%d] %s
 ' "$((CURRENT_STEP + 1))" "$TOTAL_STEPS" "$label"
