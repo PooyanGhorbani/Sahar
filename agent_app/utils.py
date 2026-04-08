@@ -54,24 +54,24 @@ def setup_logging(log_path: str) -> None:
     sh.setFormatter(fmt)
     root_logger.addHandler(sh)
 
-    app_h = logging.FileHandler(log_path_obj, encoding='utf-8')
-    app_h.setFormatter(fmt)
-    root_logger.addHandler(app_h)
+    def add_file_handler(path: Path, *, level=None, prefixes=None):
+        try:
+            handler = logging.FileHandler(path, encoding='utf-8')
+        except (PermissionError, OSError) as exc:
+            sh.setLevel(logging.WARNING)
+            root_logger.warning('could not open log file %s: %s', path, exc)
+            return
+        if level is not None:
+            handler.setLevel(level)
+        handler.setFormatter(fmt)
+        if prefixes:
+            handler.addFilter(NameFilter(prefixes))
+        root_logger.addHandler(handler)
 
-    err_h = logging.FileHandler(log_dir / 'error.log', encoding='utf-8')
-    err_h.setLevel(logging.ERROR)
-    err_h.setFormatter(fmt)
-    root_logger.addHandler(err_h)
-
-    api_h = logging.FileHandler(log_dir / 'api.log', encoding='utf-8')
-    api_h.setFormatter(fmt)
-    api_h.addFilter(NameFilter(['agent_api']))
-    root_logger.addHandler(api_h)
-
-    xray_h = logging.FileHandler(log_dir / 'xray.log', encoding='utf-8')
-    xray_h.setFormatter(fmt)
-    xray_h.addFilter(NameFilter(['xray_manager']))
-    root_logger.addHandler(xray_h)
+    add_file_handler(log_path_obj)
+    add_file_handler(log_dir / 'error.log', level=logging.ERROR)
+    add_file_handler(log_dir / 'api.log', prefixes=['agent_api'])
+    add_file_handler(log_dir / 'xray.log', prefixes=['xray_manager'])
 
     root_logger._sahar_logging_configured = True
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.38"
+APP_VERSION="0.1.39"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -796,7 +796,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.38"
+  ua="SaharInstaller/0.1.39"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -873,6 +873,14 @@ install_xray_if_needed() {
 
 enable_services() {
   chown -R "$SERVICE_USER:$SERVICE_GROUP" "$APP_DIR"
+  mkdir -p "$APP_LOG_DIR"
+  touch "$APP_LOG_DIR/master.log" "$APP_LOG_DIR/error.log" "$APP_LOG_DIR/bot.log" "$APP_LOG_DIR/scheduler.log" "$APP_LOG_DIR/provision.log"
+  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
+    touch "$APP_LOG_DIR/local-agent.log"
+  fi
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$APP_LOG_DIR"/*.log 2>/dev/null || true
+  chmod 664 "$APP_LOG_DIR"/*.log 2>/dev/null || true
+  chmod 775 "$APP_LOG_DIR"
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     systemctl daemon-reload
     if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
@@ -918,7 +926,10 @@ enable_services() {
     fi
   fi
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    su -s /bin/sh "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"
+    if ! su -s /bin/sh "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"; then
+      echo "Local node registration failed. See $APP_LOG_DIR/provision.log" >&2
+      return 1
+    fi
   fi
 }
 

@@ -1,16 +1,4 @@
-0.1.38
-- Master installer now enables and auto-registers the local node by default.
-- Telegram bot HTML responses now fall back safely when message text contains unsupported tags.
-- Reduced breakage in buttons that depended on server registration and parse_mode HTML.
-
-0.1.38
-- Removed the README section for installing from the ZIP bundle, as requested.
-- Kept the direct GitHub installation section as the primary install method.
-
-Sahar 0.1.36
-
-- Merged the runtime bot fixes that were validated on the live server into the project source.
-- Guarded optional Telegram bot handler registration so missing commands no longer crash startup.
-- Kept warning logs for skipped optional handlers instead of raising NameError.
-- Synchronized installer version strings, user-agent strings, README examples, and generated package_version to 0.1.36.
-- Updated zip/install examples in README to the current single-installer package name.
+0.1.39
+- fix local node registration failure when log files are not writable yet
+- precreate and chown master log files before starting services and registering local node
+- make logging setup fall back safely when a file handler cannot be opened

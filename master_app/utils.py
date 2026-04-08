@@ -57,29 +57,25 @@ def setup_logging(log_path: str) -> None:
     stream.setFormatter(fmt)
     root_logger.addHandler(stream)
 
-    app_handler = logging.FileHandler(log_path_obj, encoding='utf-8')
-    app_handler.setFormatter(fmt)
-    root_logger.addHandler(app_handler)
+    def add_file_handler(path: Path, *, level=None, prefixes=None):
+        try:
+            handler = logging.FileHandler(path, encoding='utf-8')
+        except (PermissionError, OSError) as exc:
+            stream.setLevel(logging.WARNING)
+            root_logger.warning('could not open log file %s: %s', path, exc)
+            return
+        if level is not None:
+            handler.setLevel(level)
+        handler.setFormatter(fmt)
+        if prefixes:
+            handler.addFilter(NameFilter(prefixes))
+        root_logger.addHandler(handler)
 
-    err_handler = logging.FileHandler(log_dir / 'error.log', encoding='utf-8')
-    err_handler.setLevel(logging.ERROR)
-    err_handler.setFormatter(fmt)
-    root_logger.addHandler(err_handler)
-
-    bot_handler = logging.FileHandler(log_dir / 'bot.log', encoding='utf-8')
-    bot_handler.setFormatter(fmt)
-    bot_handler.addFilter(NameFilter(['bot']))
-    root_logger.addHandler(bot_handler)
-
-    sched_handler = logging.FileHandler(log_dir / 'scheduler.log', encoding='utf-8')
-    sched_handler.setFormatter(fmt)
-    sched_handler.addFilter(NameFilter(['scheduler']))
-    root_logger.addHandler(sched_handler)
-
-    prov_handler = logging.FileHandler(log_dir / 'provision.log', encoding='utf-8')
-    prov_handler.setFormatter(fmt)
-    prov_handler.addFilter(NameFilter(['provisioner', 'cloudflare_manager', 'agent_client', 'register_local']))
-    root_logger.addHandler(prov_handler)
+    add_file_handler(log_path_obj)
+    add_file_handler(log_dir / 'error.log', level=logging.ERROR)
+    add_file_handler(log_dir / 'bot.log', prefixes=['bot'])
+    add_file_handler(log_dir / 'scheduler.log', prefixes=['scheduler'])
+    add_file_handler(log_dir / 'provision.log', prefixes=['provisioner', 'cloudflare_manager', 'agent_client', 'register_local'])
 
     root_logger._sahar_logging_configured = True
 
