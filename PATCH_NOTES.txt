@@ -1,8 +1,6 @@
-Sahar 0.1.21
+Sahar 0.1.22
 
-- installer: auto-install git if missing in install.sh and one-line GitHub install docs
-- installer: reduced interactive questions for master and agent installs
-- installer: moved advanced defaults to sensible preset values
-- bot: first Telegram user auto-becomes owner when no admin chat id is preconfigured
-- bot: added /settings and Telegram settings menu for core master configuration
-- readme: updated GitHub one-line install and simplified install flow docs
+- installer: fixed Alpine Xray download flow to avoid GitHub API 403/JSON parse failure
+- installer: added robust fallback download logic for Xray release archives on Alpine
+- installer: now fails with a clear Xray download error message instead of a Python traceback
+- installer: corrected internal version file to 0.1.22

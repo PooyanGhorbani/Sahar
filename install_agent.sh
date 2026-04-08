@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.19"
+APP_VERSION="0.1.22"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -253,15 +253,49 @@ map_xray_arch() {
   esac
 }
 
+download_xray_release_zip() {
+  local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
+  ua="SaharInstaller/0.1.22"
+  latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
+
+  if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
+    return 0
+  fi
+
+  resolved_url="$(curl -A "$ua" -sS -L -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest || true)"
+  tag="${resolved_url##*/tag/}"
+  tag="${tag%%[/?#]*}"
+  if [[ -n "$tag" && "$tag" != "$resolved_url" ]]; then
+    tagged_url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
+    if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$tagged_url" -o "$output_zip"; then
+      return 0
+    fi
+  fi
+
+  echo "ERROR: failed to download Xray release archive from GitHub." >&2
+  echo "Tried: $latest_url" >&2
+  if [[ -n "${tag:-}" && "$tag" != "$resolved_url" ]]; then
+    echo "Tried: $tagged_url" >&2
+  fi
+  echo "GitHub may be temporarily blocked or rate-limited from this server." >&2
+  return 1
+}
+
 install_xray_alpine() {
-  local arch tag url tmpdir
+  local arch tmpdir
   arch="$(map_xray_arch)"
-  tag="$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])')"
-  url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
   tmpdir="$(mktemp -d)"
   mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray /var/log/xray
-  curl -fsSL "$url" -o "$tmpdir/xray.zip"
+  if ! download_xray_release_zip "$arch" "$tmpdir/xray.zip"; then
+    rm -rf "$tmpdir"
+    exit 1
+  fi
   unzip -qo "$tmpdir/xray.zip" -d "$tmpdir"
+  if [[ ! -f "$tmpdir/xray" ]]; then
+    echo "ERROR: downloaded Xray archive does not contain the xray binary." >&2
+    rm -rf "$tmpdir"
+    exit 1
+  fi
   install -m 0755 "$tmpdir/xray" /usr/local/bin/xray
   if [[ -f "$tmpdir/geoip.dat" ]]; then install -m 0644 "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat; fi
   if [[ -f "$tmpdir/geosite.dat" ]]; then install -m 0644 "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat; fi
