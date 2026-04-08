@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.26"
+APP_VERSION="0.1.27"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -326,11 +326,15 @@ PY
   echo "$summary"
 }
 
+collect_bot_token_early() {
+  BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+  prompt_for_bot_token
+  validate_bot_token
+}
+
 ask_config() {
   init_config_defaults
   ADMIN_CHAT_IDS=""
-  prompt_for_bot_token
-  validate_bot_token
 }
 
 prepare_dirs() {
@@ -638,7 +642,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.26"
+  ua="SaharInstaller/0.1.27"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -814,6 +818,7 @@ main() {
   print_banner
   require_root
   check_os
+  collect_bot_token_early
   install_packages
   ensure_user
   ask_config

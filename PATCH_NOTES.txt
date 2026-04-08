@@ -1,5 +1,6 @@
-Sahar 0.1.26
+Sahar 0.1.27
 
-- Master installer now validates BOT_TOKEN automatically against the Telegram getMe API before continuing.
-- Installer stops early with a clear error if the bot token is invalid or Telegram API cannot be reached.
-- Version strings were synchronized across the bundle.
+- Master installer now asks for BOT_TOKEN at the beginning of installation when running interactively.
+- Telegram BOT_TOKEN validation now happens before long package installation steps.
+- First private Telegram chat still auto-bootstraps as owner when no admins exist.
+- Version strings updated to 0.1.27.
