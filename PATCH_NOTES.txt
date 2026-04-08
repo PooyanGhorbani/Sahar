@@ -1,7 +1,8 @@
-Sahar 0.1.19 release bundle
+Sahar 0.1.21
 
-Changes in this build:
-- improved Linux distribution detection in install.sh, install_master.sh, and install_agent.sh
-- switched installer detection logic to use ID and ID_LIKE from /etc/os-release instead of brittle PRETTY_NAME matching
-- added clearer detected OS and init-system output during installation
-- kept supported installer families explicit: Alpine, Debian, and Ubuntu-compatible systems
+- installer: auto-install git if missing in install.sh and one-line GitHub install docs
+- installer: reduced interactive questions for master and agent installs
+- installer: moved advanced defaults to sensible preset values
+- bot: first Telegram user auto-becomes owner when no admin chat id is preconfigured
+- bot: added /settings and Telegram settings menu for core master configuration
+- readme: updated GitHub one-line install and simplified install flow docs

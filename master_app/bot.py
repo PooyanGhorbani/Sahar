@@ -699,6 +699,101 @@ async def show_admin_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     await respond(update, text, InlineKeyboardMarkup(rows))
 
 
+def setting_display_value(key: str) -> str:
+    if key == 'cloudflare_api_token':
+        return 'configured' if CLOUDFLARE.get_token() else 'not set'
+    value = config.get(key)
+    if isinstance(value, bool):
+        return 'on' if value else 'off'
+    if value in (None, ''):
+        return '-'
+    return str(value)
+
+
+def settings_menu_markup() -> InlineKeyboardMarkup:
+    order = [
+        'subscription_base_url',
+        'scheduler_interval_seconds',
+        'agent_timeout_seconds',
+        'warn_days_left',
+        'warn_usage_percent',
+        'backup_interval_hours',
+        'backup_retention',
+        'cloudflare_enabled',
+        'cloudflare_domain_name',
+        'cloudflare_base_subdomain',
+        'cloudflare_api_token',
+    ]
+    rows = [[_menu_button(f"⚙️ {EDITABLE_SETTINGS[key]['label']}", f'setting:edit:{key}')] for key in order]
+    rows.append([_menu_button('🏠 خانه', 'menu:home')])
+    return InlineKeyboardMarkup(rows)
+
+
+def settings_text() -> str:
+    lines = [f"• {meta['label']}: <code>{setting_display_value(key)}</code>" for key, meta in EDITABLE_SETTINGS.items()]
+    lines.append('بعد از ذخیره، اگر لازم باشد سرویس‌های مربوطه خودکار ری‌استارت می‌شوند.')
+    return list_text('تنظیمات مستر', lines)
+
+
+async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await respond(update, settings_text(), settings_menu_markup())
+
+
+def refresh_runtime_config() -> None:
+    global AGENT_TIMEOUT, ADMIN_IDS
+    config['admin_ids'] = parse_admin_ids(config.get('admin_chat_ids', ''))
+    ADMIN_IDS = set(config.get('admin_ids') or [])
+    AGENT_TIMEOUT = int(config.get('agent_timeout_seconds', 15))
+    CLOUDFLARE.config = config
+    CLOUDFLARE.enabled = bool(config.get('cloudflare_enabled')) and bool(config.get('cloudflare_domain_name') or config.get('cloudflare_zone_name'))
+
+
+def persist_master_config() -> None:
+    save_config(CONFIG_PATH, config)
+
+
+def parse_setting_value(key: str, raw: str) -> tuple[Any, str]:
+    meta = EDITABLE_SETTINGS[key]
+    value = raw.strip()
+    if meta['type'] == 'int':
+        number = int(value)
+        if 'min' in meta and number < int(meta['min']):
+            raise ValueError(f"حداقل مقدار برای {meta['label']} برابر {meta['min']} است")
+        if 'max' in meta and number > int(meta['max']):
+            raise ValueError(f"حداکثر مقدار برای {meta['label']} برابر {meta['max']} است")
+        return number, str(number)
+    if meta['type'] == 'bool':
+        lowered = value.lower()
+        if lowered in {'1', 'on', 'true', 'yes', 'y', 'enable', 'enabled'}:
+            return True, 'on'
+        if lowered in {'0', 'off', 'false', 'no', 'n', 'disable', 'disabled'}:
+            return False, 'off'
+        raise ValueError('برای این گزینه فقط on/off یا yes/no بفرست')
+    if meta['type'] == 'secret':
+        if not value:
+            raise ValueError('این مقدار نمی‌تواند خالی باشد')
+        return value, 'configured'
+    if not value and not meta.get('allow_empty'):
+        raise ValueError('این مقدار نمی‌تواند خالی باشد')
+    return value, value or '-'
+
+
+def apply_setting_change(key: str, value: Any) -> str:
+    meta = EDITABLE_SETTINGS[key]
+    if key == 'cloudflare_api_token':
+        CLOUDFLARE.store_token(str(value))
+        return 'configured'
+    config[key] = value
+    if key == 'cloudflare_domain_name':
+        config['cloudflare_zone_name'] = value
+    persist_master_config()
+    refresh_runtime_config()
+    services = tuple(meta.get('services') or ())
+    if services:
+        schedule_service_restart(services)
+    return setting_display_value(key)
+
+
 async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     plans = DB.list_plans(enabled_only=False)
     lines = [f"• {p['label']} | {p['traffic_gb']}GB | {p['days']} روز | {'فعال' if p['enabled'] else 'غیرفعال'}" for p in plans]
@@ -880,7 +975,8 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         '/new_user <name> <traffic> <days>\n'
         '/list_users /list_servers /user_info <name>\n'
         '/list_admins /add_admin <chat_id> <owner|admin|support> /remove_admin <chat_id>\n'
-        'یا از پنل ادمین‌ها داخل ابزارها استفاده کن.\n'
+        '/settings برای تغییر تنظیمات اصلی مستر\n'
+        'یا از پنل ادمین‌ها و تنظیمات داخل ابزارها استفاده کن.\n'
         '/sync_usage /backup_now /send_backup\n'
         '/cleanup_expired /cleanup_quota\n\n'
         'برای لغو هر روند ورودی: /cancel'
@@ -1276,9 +1372,13 @@ async def remove_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 @admin_only
-@admin_only
 async def list_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_plans(update, context)
+
+
+@role_required('owner')
+async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_settings(update, context)
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1309,6 +1409,23 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if await deny_if_not_admin(update, 'owner'):
                 return
             await show_admins(update, context)
+            return
+        if data == 'tool:settings':
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            await show_settings(update, context)
+            return
+        if data.startswith('setting:edit:'):
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            key = data.split(':', 2)[2]
+            meta = EDITABLE_SETTINGS.get(key)
+            if not meta:
+                await send_temp(update, '❌ تنظیم موردنظر پیدا نشد')
+                return
+            set_prompt(context, f'setting:{key}', '')
+            sample = 'yes / no' if meta['type'] == 'bool' else 'value'
+            await send_temp(update, f"مقدار جدید برای <b>{meta['label']}</b> را بفرست.\nمقدار فعلی: <code>{setting_display_value(key)}</code>\nنمونه: <code>{sample}</code>\nبرای لغو: /cancel")
             return
         if data.startswith('admin:'):
             if await deny_if_not_admin(update, 'owner'):
@@ -1907,6 +2024,18 @@ async def prompt_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await respond(update, list_text('نتیجه جستجو', [format_user_brief(u) for u in users[:30]]), InlineKeyboardMarkup([[InlineKeyboardButton('🏠 خانه', callback_data='menu:home')]]))
             return
 
+        if action.startswith('setting:'):
+            key = action.split(':', 1)[1]
+            if key not in EDITABLE_SETTINGS:
+                raise ValueError('setting not found')
+            value, display = parse_setting_value(key, text)
+            clear_prompt(context)
+            apply_setting_change(key, value)
+            audit('update_setting', 'config', key, display)
+            await send_temp(update, f'✅ تنظیم ذخیره شد: <b>{EDITABLE_SETTINGS[key]["label"]}</b> → <code>{display}</code>')
+            await show_settings(update, context)
+            return
+
         user = DB.get_user(subject)
         if not user:
             raise ValueError('user not found')
@@ -2021,6 +2150,7 @@ def main() -> None:
     application.add_handler(CommandHandler('server_logs', server_logs_cmd))
     application.add_handler(CommandHandler('list_admins', list_admins_cmd))
     application.add_handler(CommandHandler('list_plans', list_plans_cmd))
+    application.add_handler(CommandHandler('settings', settings_cmd))
     application.add_handler(CommandHandler('add_admin', add_admin_cmd))
     application.add_handler(CommandHandler('remove_admin', remove_admin_cmd))
     application.add_handler(CommandHandler('cancel', cancel_cmd))
