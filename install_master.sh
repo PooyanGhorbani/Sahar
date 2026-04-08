@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.18"
+APP_VERSION="0.1.19"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -33,28 +33,58 @@ require_root() {
   fi
 }
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 detect_platform() {
-  if [[ ! -f /etc/os-release ]]; then
+  if [[ ! -r /etc/os-release ]]; then
     echo "Unsupported Linux distribution: /etc/os-release not found"
     exit 1
   fi
+
+  # shellcheck disable=SC1091
   . /etc/os-release
-  local os_like="${ID_LIKE:-}"
-  if [[ "${ID:-}" == "alpine" ]]; then
-    OS_FAMILY="alpine"
-    INIT_SYSTEM="openrc"
-  elif [[ "${ID:-}" =~ (ubuntu|debian) ]] || [[ "$os_like" =~ (ubuntu|debian) ]]; then
-    OS_FAMILY="debian"
+
+  OS_ID="${ID:-unknown}"
+  OS_VERSION_ID="${VERSION_ID:-unknown}"
+  OS_PRETTY_NAME="${PRETTY_NAME:-unknown}"
+
+  case "$OS_ID" in
+    alpine)
+      OS_FAMILY="alpine"
+      ;;
+    ubuntu|debian)
+      OS_FAMILY="debian"
+      ;;
+    *)
+      case "${ID_LIKE:-}" in
+        *debian*|*ubuntu*)
+          OS_FAMILY="debian"
+          ;;
+        *)
+          echo "Unsupported Linux distribution: ${OS_PRETTY_NAME}"
+          echo "Supported families: Alpine, Debian, Ubuntu"
+          exit 1
+          ;;
+      esac
+      ;;
+  esac
+
+  if command_exists systemctl; then
     INIT_SYSTEM="systemd"
+  elif command_exists rc-service; then
+    INIT_SYSTEM="openrc"
   else
-    echo "Unsupported Linux distribution. Supported: Ubuntu, Debian, Alpine."
-    exit 1
+    INIT_SYSTEM="unknown"
   fi
 }
 
 check_os() {
   detect_platform
+  echo "Detected OS: $OS_PRETTY_NAME"
   echo "Detected OS family: $OS_FAMILY"
+  echo "Detected init system: $INIT_SYSTEM"
 }
 
 resolve_host_ready() {

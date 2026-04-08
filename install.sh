@@ -2,6 +2,11 @@
 set -eu
 
 MODE="${1:-}"
+OS_ID=""
+OS_VERSION_ID=""
+OS_PRETTY_NAME=""
+OS_FAMILY=""
+INIT_SYSTEM=""
 
 print_banner() {
   echo "=========================================="
@@ -17,15 +22,23 @@ require_root() {
   fi
 }
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 detect_os() {
-  if [ ! -f /etc/os-release ]; then
+  if [ ! -r /etc/os-release ]; then
     echo "Unsupported Linux distribution: /etc/os-release not found"
     exit 1
   fi
+
   # shellcheck disable=SC1091
   . /etc/os-release
-  OS_ID="${ID:-}"
-  OS_LIKE="${ID_LIKE:-}"
+
+  OS_ID="${ID:-unknown}"
+  OS_VERSION_ID="${VERSION_ID:-unknown}"
+  OS_PRETTY_NAME="${PRETTY_NAME:-unknown}"
+
   case "$OS_ID" in
     alpine)
       OS_FAMILY="alpine"
@@ -34,24 +47,33 @@ detect_os() {
       OS_FAMILY="debian"
       ;;
     *)
-      case "$OS_LIKE" in
+      case "${ID_LIKE:-}" in
         *debian*|*ubuntu*)
           OS_FAMILY="debian"
           ;;
         *)
-          echo "Unsupported Linux distribution. Supported: Ubuntu, Debian, Alpine."
+          echo "Unsupported Linux distribution: ${OS_PRETTY_NAME}"
+          echo "Supported families: Alpine, Debian, Ubuntu"
           exit 1
           ;;
       esac
       ;;
   esac
+
+  if command_exists systemctl; then
+    INIT_SYSTEM="systemd"
+  elif command_exists rc-service; then
+    INIT_SYSTEM="openrc"
+  else
+    INIT_SYSTEM="unknown"
+  fi
 }
 
 ensure_bootstrap_packages() {
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt update
-    apt install -y bash curl unzip ca-certificates
+    apt-get update
+    apt-get install -y bash curl unzip ca-certificates
   else
     apk add --no-cache bash curl unzip ca-certificates
   fi
@@ -95,6 +117,8 @@ print_banner
 require_root
 prompt_mode
 detect_os
+echo "Detected OS: $OS_PRETTY_NAME"
 echo "Detected OS family: $OS_FAMILY"
+echo "Detected init system: $INIT_SYSTEM"
 ensure_bootstrap_packages
 run_mode

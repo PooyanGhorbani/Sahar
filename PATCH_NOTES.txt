@@ -1,11 +1,7 @@
-Sahar 0.1.18 release bundle
+Sahar 0.1.19 release bundle
 
 Changes in this build:
-- fixed SSH agent provisioning for non-interactive installs by supplying safe Reality defaults
-- added clearer privilege checks for remote SSH provisioning when sudo is required
-- improved subscription URL fallback to avoid unusable 0.0.0.0 links
-- expanded control-panel status to include subscription and local-agent services
-- hardened agent source-IP validation against malformed remote addresses
-- improved agent version endpoint output
-- improved domain resolution checks in installers for Alpine and Debian-based systems
-- refreshed README with one-line GitHub install guidance and fuller Cloudflare automation docs
+- improved Linux distribution detection in install.sh, install_master.sh, and install_agent.sh
+- switched installer detection logic to use ID and ID_LIKE from /etc/os-release instead of brittle PRETTY_NAME matching
+- added clearer detected OS and init-system output during installation
+- kept supported installer families explicit: Alpine, Debian, and Ubuntu-compatible systems
