@@ -1,3 +1,7 @@
+0.1.24
+- Fixed Alpine/Debian service account creation for sahar-master by creating an explicit service group before chown/systemd setup.
+- Prevented install failure at chown: unknown user/group sahar-master:sahar-master.
+
 0.1.23
 - installer no longer asks interactive questions; defaults are applied automatically with optional env overrides
 - install.sh defaults to master mode when no argument is provided and auto-installs git in bootstrap packages

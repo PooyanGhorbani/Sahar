@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.23"
+APP_VERSION="0.1.24"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -12,6 +12,7 @@ APP_QR_DIR="$APP_DIR/qrcodes"
 APP_BACKUP_DIR="$APP_DIR/backups"
 VENV_DIR="$APP_DIR/venv"
 SERVICE_USER="sahar-master"
+SERVICE_GROUP="sahar-master"
 BOT_SERVICE_NAME="sahar-master-bot"
 SCHED_SERVICE_NAME="sahar-master-scheduler"
 LOCAL_AGENT_SERVICE_NAME="sahar-master-local-agent"
@@ -111,11 +112,19 @@ install_packages() {
 }
 
 ensure_user() {
+  if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    if [[ "$OS_FAMILY" == "debian" ]]; then
+      groupadd --system "$SERVICE_GROUP"
+    else
+      addgroup -S "$SERVICE_GROUP"
+    fi
+  fi
+
   if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     if [[ "$OS_FAMILY" == "debian" ]]; then
-      useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+      useradd --system --gid "$SERVICE_GROUP" --home "$APP_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
     else
-      adduser -S -D -H -h "$APP_DIR" -s /sbin/nologin "$SERVICE_USER"
+      adduser -S -D -H -h "$APP_DIR" -s /sbin/nologin -G "$SERVICE_GROUP" "$SERVICE_USER"
     fi
   fi
 }
@@ -357,7 +366,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$SERVICE_USER
-Group=$SERVICE_USER
+Group=$SERVICE_GROUP
 WorkingDirectory=$APP_APP_DIR
 Environment=SAHAR_CONFIG=$APP_DATA_DIR/config.json
 ExecStart=$VENV_DIR/bin/python $APP_APP_DIR/bot.py
@@ -382,7 +391,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$SERVICE_USER
-Group=$SERVICE_USER
+Group=$SERVICE_GROUP
 WorkingDirectory=$APP_APP_DIR
 Environment=SAHAR_CONFIG=$APP_DATA_DIR/config.json
 ExecStart=$VENV_DIR/bin/gunicorn -w 2 -k gthread --threads 4 --bind ${SUBSCRIPTION_BIND_HOST}:${SUBSCRIPTION_BIND_PORT} subscription_api:APP
@@ -407,7 +416,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$SERVICE_USER
-Group=$SERVICE_USER
+Group=$SERVICE_GROUP
 WorkingDirectory=$APP_APP_DIR
 Environment=SAHAR_CONFIG=$APP_DATA_DIR/config.json
 ExecStart=$VENV_DIR/bin/python $APP_APP_DIR/scheduler.py
@@ -628,7 +637,7 @@ install_xray_if_needed() {
 }
 
 enable_services() {
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_GROUP" "$APP_DIR"
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     systemctl daemon-reload
     if [[ "$LOCAL_NODE_ENABLED" == true ]]; then

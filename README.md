@@ -1,4 +1,4 @@
-# سحر 0.1.23
+# سحر 0.1.24
 
 ![Sahar banner](assets/banner.png)
 
@@ -14,6 +14,8 @@
 > **Important:** This project supports **Ubuntu / Debian / Alpine** only and installation must run with **root** privileges.
 
 ---
+
+> Alpine note / نکته Alpine: if you saw `chown: unknown user/group sahar-master:sahar-master`, use v0.1.24 or newer. The installer now creates the service group explicitly before ownership and service setup.
 
 ## معرفی پروژه | Project overview
 
