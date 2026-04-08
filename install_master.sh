@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.29"
+APP_VERSION="0.1.32"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -20,12 +20,161 @@ SUB_SERVICE_NAME="sahar-master-subscription"
 XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-print_banner() {
-  echo "=========================================="
-  echo "Sahar Master Installer v${APP_VERSION}"
-  echo "=========================================="
-  echo
+LOG_FILE="/tmp/sahar-master-installer.log"
+TOTAL_STEPS=12
+CURRENT_STEP=0
+BAR_WIDTH=40
+CURRENT_LABEL="Preparing installer"
+CURRENT_STATUS="Waiting"
+CURRENT_SPINNER="-"
+SPINNER_INDEX=0
+UI_TTY=0
+C_RESET=""
+C_BOLD=""
+C_DIM=""
+C_GREEN=""
+C_CYAN=""
+C_YELLOW=""
+C_RED=""
+
+setup_ui() {
+  : > "$LOG_FILE"
+  if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
+    UI_TTY=1
+    C_RESET=$'[0m'
+    C_BOLD=$'[1m'
+    C_DIM=$'[2m'
+    C_GREEN=$'[32m'
+    C_CYAN=$'[36m'
+    C_YELLOW=$'[33m'
+    C_RED=$'[31m'
+    printf '[?25l'
+    trap cleanup_ui EXIT
+  fi
 }
+
+cleanup_ui() {
+  if (( UI_TTY )); then
+    printf '[?25h'
+  fi
+}
+
+advance_spinner() {
+  case $((SPINNER_INDEX % 4)) in
+    0) CURRENT_SPINNER='|' ;;
+    1) CURRENT_SPINNER='/' ;;
+    2) CURRENT_SPINNER='-' ;;
+    3) CURRENT_SPINNER='\' ;;
+  esac
+  SPINNER_INDEX=$((SPINNER_INDEX + 1))
+}
+
+progress_bar() {
+  local done_slots pending_slots fill empty
+  done_slots=$((CURRENT_STEP * BAR_WIDTH / TOTAL_STEPS))
+  pending_slots=$((BAR_WIDTH - done_slots))
+  fill=$(printf '%*s' "$done_slots" '')
+  fill=${fill// /=}
+  empty=$(printf '%*s' "$pending_slots" '')
+  printf '%s%s' "$fill" "$empty"
+}
+
+draw_screen() {
+  local percent step_no bar
+  (( UI_TTY )) || return 0
+  percent=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+  step_no=$((CURRENT_STEP + 1))
+  if (( step_no > TOTAL_STEPS )); then
+    step_no=$TOTAL_STEPS
+  fi
+  bar="$(progress_bar)"
+  printf '[H[2J'
+  printf '%s%sSahar Master Installer v%s%s
+' "$C_BOLD" "$C_CYAN" "$APP_VERSION" "$C_RESET"
+  printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
+' "$C_DIM" "$C_RESET"
+  printf ' %sMode%s        Master
+' "$C_DIM" "$C_RESET"
+  printf ' %sSystem%s      %s
+' "$C_DIM" "$C_RESET" "${OS_PRETTY_NAME:-Detecting...}"
+  printf ' %sInit%s        %s
+' "$C_DIM" "$C_RESET" "${INIT_SYSTEM:-Detecting...}"
+  printf ' %sStep%s        %d/%d
+' "$C_DIM" "$C_RESET" "$step_no" "$TOTAL_STEPS"
+  printf ' %sStage%s       %s
+' "$C_DIM" "$C_RESET" "$CURRENT_LABEL"
+  printf ' %sStatus%s      %s
+' "$C_DIM" "$C_RESET" "$CURRENT_STATUS"
+  printf ' %sLog%s         %s
+
+' "$C_DIM" "$C_RESET" "$LOG_FILE"
+  printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
+
+' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
+  printf '%sOnly the bot token is requested. Package details stay hidden.%s
+' "$C_YELLOW" "$C_RESET"
+}
+
+ui_newline() {
+  printf '
+'
+}
+
+run_step() {
+  local label="$1" pid start_ts elapsed
+  shift
+  CURRENT_LABEL="$label"
+  if (( UI_TTY )); then
+    "$@" >>"$LOG_FILE" 2>&1 &
+    pid=$!
+    start_ts=$(date +%s)
+    while kill -0 "$pid" 2>/dev/null; do
+      elapsed=$(( $(date +%s) - start_ts ))
+      advance_spinner
+      CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
+      draw_screen
+      sleep 0.12
+    done
+    if ! wait "$pid"; then
+      ui_fail "$label"
+    fi
+  else
+    printf '[%d/%d] %s
+' "$((CURRENT_STEP + 1))" "$TOTAL_STEPS" "$label"
+    if ! "$@" >>"$LOG_FILE" 2>&1; then
+      ui_fail "$label"
+    fi
+  fi
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  CURRENT_STATUS="Completed"
+  draw_screen
+}
+
+ui_fail() {
+  local label="$1"
+  CURRENT_STATUS="Failed"
+  draw_screen
+  ui_newline
+  printf '%sInstallation failed.%s
+' "$C_RED" "$C_RESET" >&2
+  printf 'Step: %s
+' "$label" >&2
+  printf 'Details: %s
+' "$LOG_FILE" >&2
+  if [[ -s "$LOG_FILE" ]]; then
+    printf '
+Last log lines:
+' >&2
+    tail -n 20 "$LOG_FILE" >&2 || true
+  fi
+  exit 1
+}
+
+print_banner() {
+  CURRENT_STATUS="Ready"
+  draw_screen
+}
+
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -83,9 +232,6 @@ detect_platform() {
 
 check_os() {
   detect_platform
-  echo "Detected OS: $OS_PRETTY_NAME"
-  echo "Detected OS family: $OS_FAMILY"
-  echo "Detected init system: $INIT_SYSTEM"
 }
 
 resolve_host_ready() {
@@ -259,11 +405,27 @@ prompt_for_bot_token() {
   if [[ ! -t 0 ]]; then
     return 0
   fi
-  echo
-  echo "Telegram bot token is not set."
-  echo "Paste the bot token now. Leave empty to skip bot startup for now."
-  read -r -p "BOT_TOKEN: " BOT_TOKEN_INPUT || true
+  if (( UI_TTY )); then
+    printf '[H[2J'
+    printf '%s%sTelegram bot token required%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+    printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
+' "$C_DIM" "$C_RESET"
+    printf ' Paste the BotFather token below. Input stays hidden.
+'
+    printf ' The first private chat that sends /start becomes owner automatically.
+
+'
+    read -rsp ' BOT_TOKEN: ' BOT_TOKEN_INPUT || true
+    printf '
+'
+  else
+    read -r -p "BOT_TOKEN: " BOT_TOKEN_INPUT || true
+  fi
   BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+  CURRENT_LABEL="Bot token captured"
+  CURRENT_STATUS="Ready"
+  draw_screen
 }
 
 validate_bot_token() {
@@ -272,7 +434,6 @@ validate_bot_token() {
     return 0
   fi
 
-  echo "Validating Telegram bot token..."
   payload="$(curl -sS --connect-timeout 10 --max-time 20 -w $'\n%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
   if [[ -z "$payload" ]]; then
     echo "ERROR: Could not reach the Telegram API to validate BOT_TOKEN."
@@ -299,18 +460,17 @@ validate_bot_token() {
   username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   if [[ -n "$username" ]]; then
-    echo "Validated bot: @${username}"
+    :
   elif [[ -n "$first_name" ]]; then
-    echo "Validated bot: ${first_name}"
+    :
   else
-    echo "Validated bot token successfully."
+    :
   fi
 }
 
-collect_bot_token_early() {
+prepare_bot_token_input() {
   BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
   prompt_for_bot_token
-  validate_bot_token
 }
 
 ask_config() {
@@ -623,7 +783,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.29"
+  ua="SaharInstaller/0.1.30"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -751,8 +911,17 @@ enable_services() {
 
 
 print_done() {
-  echo
-  echo "Master installed successfully."
+  if (( UI_TTY )); then
+    CURRENT_STEP=$TOTAL_STEPS
+    CURRENT_LABEL="Installation complete"
+    CURRENT_STATUS="Ready"
+    draw_screen
+    ui_newline
+  else
+    echo
+  fi
+  printf '%sMaster installed successfully.%s
+' "$C_GREEN" "$C_RESET"
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     echo "Services:"
     echo "  systemctl status $BOT_SERVICE_NAME"
@@ -796,21 +965,24 @@ print_done() {
 
 
 main() {
+  setup_ui
   print_banner
   require_root
-  check_os
-  collect_bot_token_early
-  install_packages
-  ensure_user
-  ask_config
-  prepare_dirs
-  copy_code
-  write_config
-  setup_venv
-  install_xray_if_needed
-  write_services
-  write_logrotate
-  enable_services
+  run_step "Checking system" check_os
+  prepare_bot_token_input
+  run_step "Validating bot token" validate_bot_token
+  run_step "Installing system packages" install_packages
+  run_step "Creating service account" ensure_user
+  run_step "Preparing defaults" ask_config
+  run_step "Creating directories" prepare_dirs
+  run_step "Copying application files" copy_code
+  run_step "Writing configuration" write_config
+  run_step "Building Python environment" setup_venv
+  run_step "Installing Xray components" install_xray_if_needed
+  run_step "Writing service files" write_services
+  run_step "Configuring log rotation" write_logrotate
+  run_step "Starting services" enable_services
+  ui_newline
   print_done
 }
 
