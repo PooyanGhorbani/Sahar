@@ -768,7 +768,8 @@ def tools_menu_markup() -> InlineKeyboardMarkup:
         [_menu_button('💾 بکاپ', 'tool:backup_now'), _menu_button('📤 ارسال بکاپ', 'tool:send_backup')],
         [_menu_button('📄 CSV کاربران', 'tool:export_users'), _menu_button('📊 وضعیت', 'tool:status')],
         [_menu_button('🛡 ادمین‌ها', 'tool:list_admins'), _menu_button('📦 پلن‌ها', 'tool:list_plans')],
-        [_menu_button('☁️ کلودفلر', 'tool:cloudflare'), _menu_button('🩺 Doctor', 'tool:doctor')],
+        [_menu_button('☁️ کلودفلر', 'tool:cloudflare'), _menu_button('⚙️ تنظیمات', 'tool:settings')],
+        [_menu_button('🩺 Doctor', 'tool:doctor')],
         [_menu_button('🏠 خانه', 'menu:home')],
     ])
 
@@ -1288,6 +1289,7 @@ async def show_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         '• ارسال آخرین بکاپ به تلگرام',
         '• خروجی CSV کاربران',
         '• تنظیم کلودفلر و DNS از داخل تلگرام',
+        '• مدیریت پلن‌ها و تنظیمات مستر',
         '• بازگشت به داشبورد',
     ]
     if latest_backup:
@@ -2056,6 +2058,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_tools(update, context)
         elif data == 'tool:cloudflare':
             await show_cloudflare(update, context)
+        elif data == 'tool:settings':
+            await show_settings(update, context)
+        elif data == 'tool:list_plans':
+            await show_plans(update, context)
         elif data == 'tool:doctor':
             await doctor_cmd(update, context)
         elif data == 'menu:help':
@@ -2064,6 +2070,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_user(update, context, data.split(':', 1)[1])
         elif data.startswith('server:'):
             await show_server(update, context, int(data.split(':', 1)[1]))
+        elif data == 'act:noop':
+            return
         elif data.startswith('act:prompt:'):
             parts = data.split(':')
             action = parts[2]

@@ -8,7 +8,7 @@ OS_PRETTY_NAME=""
 OS_FAMILY=""
 INIT_SYSTEM=""
 LOG_FILE="/tmp/sahar-bootstrap-installer.log"
-TOTAL_STEPS=2
+TOTAL_STEPS=3
 CURRENT_STEP=0
 BAR_WIDTH=34
 CURRENT_LABEL="Preparing bootstrap"
@@ -235,7 +235,30 @@ detect_os() {
   fi
 }
 
+bootstrap_tools_missing() {
+  for cmd in bash curl unzip git; do
+    if ! command_exists "$cmd"; then
+      return 0
+    fi
+  done
+  if [ ! -f /etc/ssl/certs/ca-certificates.crt ] && [ ! -d /etc/ssl/certs ]; then
+    return 0
+  fi
+  return 1
+}
+
+preflight_bootstrap() {
+  detect_os
+}
+
+run_bootstrap_preflight() {
+  bootstrap_tools_missing || true
+}
+
 ensure_bootstrap_packages() {
+  if ! bootstrap_tools_missing; then
+    return 0
+  fi
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
@@ -263,15 +286,8 @@ run_mode() {
 setup_ui
 print_banner
 require_root
-CURRENT_LABEL="Checking system"
-CURRENT_STATUS="Running"
-draw_screen
-if ! detect_os >>"$LOG_FILE" 2>&1; then
-  fail_install "Checking system"
-fi
-CURRENT_STEP=1
-CURRENT_STATUS="Completed"
-draw_screen
+run_step "Checking system" preflight_bootstrap
+run_step "Running preflight checks" run_bootstrap_preflight
 run_step "Preparing bootstrap tools" ensure_bootstrap_packages
 CURRENT_STEP=$TOTAL_STEPS
 CURRENT_LABEL="Handing off to ${MODE} installer"

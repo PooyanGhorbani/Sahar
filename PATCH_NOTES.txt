@@ -1,11 +1,10 @@
-Sahar 0.1.46
+Sahar 0.1.49
 
-- Added automatic server down/recovery alerts to the scheduler for admin Telegram notifications.
-- Added automatic periodic Cloudflare DNS/Tunnel sync with configurable interval.
-- Added raw subscription URL and one-tap subscription token rotation in the Telegram panel.
-- Added a Doctor command/page for quick operational diagnostics.
-- Expanded server detail actions with profiles, DNS refresh, Xray status, and logs.
-- Surfaced richer Cloudflare metadata on the server detail page.
-- Added new master config defaults for Cloudflare auto sync and server status alerts.
+- Improved installer feedback during the Python environment stage so the screen now shows whether it is preparing a venv, refreshing pip tooling, building wheels, using cached wheels, installing from the cached wheelhouse, or reusing the cached Python environment.
+- Added per-step live status notes to the master and agent installers so long-running hidden package work no longer looks frozen.
 
-- Legacy database migration hardening for old plans/admin/admin-access/subscription tables.
+Sahar 0.1.48
+
+- Added bootstrap preflight so the top-level installer can skip package manager work when the required bootstrap tools already exist.
+- Added shared pip cache and per-app wheelhouse caches for faster reinstall and upgrade runs on the same server.
+- Saved and reused the Telegram bot token automatically from /etc/sahar/master.env so later installs do not ask again unless needed.

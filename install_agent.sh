@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.46"
+APP_VERSION="0.1.49"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -12,9 +12,14 @@ VENV_DIR="$APP_DIR/venv"
 API_SERVICE_NAME="sahar-agent"
 XRAY_CONFIG_PATH="/usr/local/etc/xray/config.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_STATE_DIR="$APP_DATA_DIR/.installer-state"
+CACHE_DIR="/var/cache/sahar"
+PIP_CACHE_DIR="$CACHE_DIR/pip"
+WHEELHOUSE_DIR="$CACHE_DIR/wheelhouse/agent"
 
 LOG_FILE="/tmp/sahar-agent-installer.log"
-TOTAL_STEPS=10
+STATUS_FILE="/tmp/sahar-agent-installer.status"
+TOTAL_STEPS=11
 CURRENT_STEP=0
 BAR_WIDTH=40
 CURRENT_LABEL="Preparing installer"
@@ -37,6 +42,7 @@ INIT_SYSTEM=""
 
 setup_ui() {
   : > "$LOG_FILE"
+  : > "$STATUS_FILE"
   if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
     UI_TTY=1
     C_RESET=$'[0m'
@@ -109,22 +115,38 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sAgent setup runs silently with defaults and keeps package output hidden.%s
-' "$C_YELLOW" "$C_RESET"
+  printf '%sAgent setup runs silently with defaults and keeps package output hidden.%s\n' "$C_YELLOW" "$C_RESET"
+  printf '%sPython environment shows cache and wheel activity live.%s\n' "$C_DIM" "$C_RESET"
 }
 
 ui_newline() {
-  printf '
-'
+  printf '\n'
+}
+
+status_note() {
+  local message="${1:-}"
+  printf '%s\n' "$message" > "$STATUS_FILE"
+  printf 'STATUS: %s\n' "$message" >> "$LOG_FILE"
+}
+
+current_step_status() {
+  if [[ -s "$STATUS_FILE" ]]; then
+    tail -n 1 "$STATUS_FILE" 2>/dev/null || true
+  fi
 }
 
 spinner_loop() {
-  local start_ts elapsed
+  local start_ts elapsed step_note
   start_ts=$(date +%s)
   while true; do
     elapsed=$(( $(date +%s) - start_ts ))
     advance_spinner
-    CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
+    step_note="$(current_step_status)"
+    if [[ -n "$step_note" ]]; then
+      CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s · ${step_note}"
+    else
+      CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
+    fi
     draw_screen
     sleep 0.12
   done
@@ -134,6 +156,7 @@ run_step() {
   local label="$1" spinner_pid
   shift
   CURRENT_LABEL="$label"
+  : > "$STATUS_FILE"
   if (( UI_TTY )); then
     spinner_loop &
     spinner_pid=$!
@@ -151,6 +174,7 @@ run_step() {
       ui_fail "$label"
     fi
   fi
+  : > "$STATUS_FILE"
   CURRENT_STEP=$((CURRENT_STEP + 1))
   CURRENT_STATUS="Completed"
   draw_screen
@@ -191,6 +215,10 @@ require_root() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+file_sha256() {
+  sha256sum "$1" | awk '{print $1}'
 }
 
 detect_platform() {
@@ -240,6 +268,10 @@ check_os() {
   detect_platform
 }
 
+preflight_checks() {
+  mkdir -p "$INSTALLER_STATE_DIR" "$PIP_CACHE_DIR" "$WHEELHOUSE_DIR"
+}
+
 
 detect_ssh_client_ip() {
   if [[ -n "${SSH_CLIENT:-}" ]]; then
@@ -276,10 +308,29 @@ resolve_host_ready() {
 }
 
 install_packages() {
+  local need_install=0
   if [[ "$OS_FAMILY" == "debian" ]]; then
+    for cmd in python3 pip3 curl jq git unzip; do
+      if ! command_exists "$cmd"; then
+        need_install=1
+        break
+      fi
+    done
+    if [[ $need_install -eq 0 ]]; then
+      return 0
+    fi
     apt update
     apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate git
   else
+    for cmd in python3 pip3 curl jq git unzip gcc; do
+      if ! command_exists "$cmd"; then
+        need_install=1
+        break
+      fi
+    done
+    if [[ $need_install -eq 0 ]]; then
+      return 0
+    fi
     apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers git
   fi
 }
@@ -462,7 +513,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.46"
+  ua="SaharInstaller/0.1.48"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -527,6 +578,9 @@ EOF
 
 
 install_xray() {
+  if command_exists xray; then
+    return 0
+  fi
   echo "Installing Xray..."
   if [[ "$OS_FAMILY" == "debian" ]]; then
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
@@ -579,6 +633,11 @@ JSON
 }
 
 setup_venv() {
+  local req_hash state_file wheel_state_file venv_python_tag wheel_state expected_wheel_state
+  mkdir -p "$INSTALLER_STATE_DIR" "$PIP_CACHE_DIR" "$WHEELHOUSE_DIR"
+  state_file="$INSTALLER_STATE_DIR/agent-requirements.sha256"
+  wheel_state_file="$INSTALLER_STATE_DIR/agent-wheelhouse.sha256"
+  status_note "Preparing virtual environment"
   if ! python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
     if command -v virtualenv >/dev/null 2>&1; then
       virtualenv "$VENV_DIR"
@@ -587,8 +646,34 @@ setup_venv() {
       python3 -m venv "$VENV_DIR"
     fi
   fi
-  "$VENV_DIR/bin/pip" install --upgrade pip
-  "$VENV_DIR/bin/pip" install -r "$APP_APP_DIR/requirements.txt"
+  req_hash="$(file_sha256 "$APP_APP_DIR/requirements.txt")"
+  venv_python_tag="$($VENV_DIR/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")"
+  expected_wheel_state="${req_hash}|${OS_FAMILY}|${venv_python_tag}"
+  if [[ -x "$VENV_DIR/bin/python" && -x "$VENV_DIR/bin/pip" && -f "$state_file" ]] && [[ "$(cat "$state_file")" == "$expected_wheel_state" ]]; then
+    status_note "Using cached Python environment"
+    return 0
+  fi
+  export PIP_CACHE_DIR
+  status_note "Refreshing pip tooling"
+  "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
+  wheel_state=""
+  if [[ -f "$wheel_state_file" ]]; then
+    wheel_state="$(cat "$wheel_state_file")"
+  fi
+  if [[ "$wheel_state" != "$expected_wheel_state" ]]; then
+    status_note "Building wheels for Python packages"
+    rm -rf "$WHEELHOUSE_DIR"
+    mkdir -p "$WHEELHOUSE_DIR"
+    "$VENV_DIR/bin/pip" wheel -r "$APP_APP_DIR/requirements.txt" --wheel-dir "$WHEELHOUSE_DIR"
+    printf '%s
+' "$expected_wheel_state" > "$wheel_state_file"
+  else
+    status_note "Using cached wheels"
+  fi
+  status_note "Installing from cached wheelhouse"
+  "$VENV_DIR/bin/pip" install --no-index --find-links "$WHEELHOUSE_DIR" -r "$APP_APP_DIR/requirements.txt"
+  printf '%s
+' "$expected_wheel_state" > "$state_file"
 }
 
 write_service() {
@@ -682,6 +767,7 @@ main() {
   print_banner
   require_root
   run_step "Checking system" check_os
+  run_step "Running preflight checks" preflight_checks
   run_step "Installing system packages" install_packages
   run_step "Preparing defaults" load_noninteractive_env
   run_step "Installing Xray components" install_xray
