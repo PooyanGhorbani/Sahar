@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.37"
+APP_VERSION="0.1.38"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -370,7 +370,7 @@ print(base64.urlsafe_b64encode(os.urandom(32)).decode())
 PY2
 )}"
 
-  LOCAL_NODE_ENABLED="$(parse_bool "${LOCAL_NODE_ENABLED:-false}")"
+  LOCAL_NODE_ENABLED="$(parse_bool "${LOCAL_NODE_ENABLED:-true}")"
   LOCAL_SERVER_NAME="${LOCAL_SERVER_NAME:-local}"
   LOCAL_AGENT_LISTEN_HOST="${LOCAL_AGENT_LISTEN_HOST:-127.0.0.1}"
   LOCAL_AGENT_LISTEN_PORT="${LOCAL_AGENT_LISTEN_PORT:-8787}"
@@ -796,7 +796,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.37"
+  ua="SaharInstaller/0.1.38"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then

@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import html
 import math
 import os
+import re
 import secrets
 import socket
 import tempfile
@@ -16,6 +18,7 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -61,6 +64,23 @@ WIZARD_KEY = 'create_user_wizard'
 CONFIRM_KEY = 'pending_confirm'
 SSH_WIZARD_KEY = 'ssh_server_wizard'
 CONFIRM_TTL_SECONDS = 180
+SUPPORTED_HTML_TAGS_RE = re.compile(r'</?(?:b|strong|i|em|u|ins|s|strike|del|span|tg-spoiler|code|pre|a)(?:\s+[^>]*)?>', re.IGNORECASE)
+
+
+def _plain_text_fallback(text: str) -> str:
+    cleaned = SUPPORTED_HTML_TAGS_RE.sub('', text or '')
+    return html.unescape(cleaned)
+
+
+async def _reply_html_or_plain(method, text: str, **kwargs):
+    try:
+        return await method(text=text, parse_mode=ParseMode.HTML, disable_web_page_preview=True, **kwargs)
+    except BadRequest as exc:
+        if 'parse entities' not in str(exc).lower():
+            raise
+        return await method(text=_plain_text_fallback(text), disable_web_page_preview=True, **kwargs)
+
+
 ROLE_LEVELS = {'viewer': 1, 'support': 2, 'admin': 3, 'owner': 4}
 ROLE_LABELS = {'owner': 'مالک', 'admin': 'ادمین', 'support': 'پشتیبان', 'viewer': 'مشاهده‌گر'}
 AUDIT_ACTOR = contextvars.ContextVar('audit_actor', default={'chat_id': 'system', 'role': 'system'})
@@ -158,16 +178,16 @@ async def respond(update: Update, text: str, reply_markup: Optional[InlineKeyboa
     if update.callback_query:
         query = update.callback_query
         try:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            await _reply_html_or_plain(query.edit_message_text, text, reply_markup=reply_markup)
         except Exception:
-            await query.message.reply_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            await _reply_html_or_plain(query.message.reply_text, text, reply_markup=reply_markup)
     elif update.effective_message:
-        await update.effective_message.reply_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await _reply_html_or_plain(update.effective_message.reply_text, text, reply_markup=reply_markup)
 
 
 async def send_temp(update: Update, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None) -> None:
     if update.effective_message:
-        await update.effective_message.reply_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await _reply_html_or_plain(update.effective_message.reply_text, text, reply_markup=reply_markup)
 
 
 async def safe_answer(query) -> None:
