@@ -65,6 +65,9 @@ class AgentClient:
     def health(self) -> Dict[str, Any]:
         return self.get('/health')
 
+    def config_summary(self) -> Dict[str, Any]:
+        return self.get('/config/summary')
+
     def add_user(self, username: str, uuid_value: str) -> Dict[str, Any]:
         return self.post('/users/add', {'username': username, 'uuid': uuid_value})
 

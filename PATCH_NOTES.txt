@@ -1,4 +1,4 @@
-0.1.39
+0.1.40
 - fix local node registration failure when log files are not writable yet
 - precreate and chown master log files before starting services and registering local node
 - make logging setup fall back safely when a file handler cannot be opened

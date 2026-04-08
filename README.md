@@ -1,11 +1,11 @@
-# سحر 0.1.39
+# سحر 0.1.40
 
 ![Sahar banner](assets/banner.png)
 
 **سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.39-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.40-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)

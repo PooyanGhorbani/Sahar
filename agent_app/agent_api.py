@@ -86,7 +86,27 @@ def require_token(func):
 @APP.get('/health')
 @require_token
 def health():
-    data = XRAY.health()
+    try:
+        data = XRAY.health()
+    except Exception as exc:
+        LOGGER.exception('health_failed')
+        data = {
+            'agent_name': CONFIG.get('agent_name', ''),
+            'public_host': CONFIG.get('public_host', ''),
+            'host_mode': CONFIG.get('host_mode', ''),
+            'xray_port': CONFIG.get('simple_port') or CONFIG.get('xray_port') or 0,
+            'simple_port': CONFIG.get('simple_port') or CONFIG.get('xray_port') or 0,
+            'reality_port': CONFIG.get('reality_port') or 0,
+            'transport_mode': CONFIG.get('transport_mode', 'dual'),
+            'reality_server_name': CONFIG.get('reality_server_name', ''),
+            'reality_public_key': CONFIG.get('reality_public_key', ''),
+            'reality_short_id': CONFIG.get('reality_short_id', ''),
+            'fingerprint': CONFIG.get('fingerprint', 'chrome'),
+            'xray_active': False,
+            'user_count': 0,
+            'profiles': [],
+            'health_warning': str(exc),
+        }
     data['server_time'] = now_iso()
     return ok(data)
 

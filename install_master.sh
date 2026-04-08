@@ -796,7 +796,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.39"
+  ua="SaharInstaller/0.1.40"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -887,7 +887,7 @@ enable_services() {
       systemctl enable xray --now
       systemctl enable "$LOCAL_AGENT_SERVICE_NAME" --now
       for _ in $(seq 1 20); do
-        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
           break
         fi
         sleep 2
@@ -913,7 +913,7 @@ enable_services() {
       rc-update add "$LOCAL_AGENT_SERVICE_NAME" default
       rc-service "$LOCAL_AGENT_SERVICE_NAME" start
       for _ in $(seq 1 20); do
-        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
+        if curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/config/summary" >/dev/null 2>&1 ||            curl -fsS -H "X-Agent-Token: $LOCAL_AGENT_API_TOKEN" "$LOCAL_AGENT_API_URL/health" >/dev/null 2>&1; then
           break
         fi
         sleep 2
