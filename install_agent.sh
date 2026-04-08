@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.41"
+APP_VERSION="0.1.46"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -462,7 +462,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.41"
+  ua="SaharInstaller/0.1.46"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then

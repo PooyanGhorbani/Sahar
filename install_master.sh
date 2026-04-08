@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.39"
+APP_VERSION="0.1.46"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -526,6 +526,10 @@ write_config() {
   "cloudflare_base_subdomain": "$CLOUDFLARE_BASE_SUBDOMAIN",
   "cloudflare_token_encryption_key": "$CLOUDFLARE_TOKEN_ENCRYPTION_KEY",
   "cloudflare_dns_proxied": false,
+  "cloudflare_tunnel_enabled": false,
+  "cloudflare_auto_sync_enabled": true,
+  "cloudflare_auto_sync_interval_minutes": 30,
+  "notify_on_server_status_change": true,
   "subscription_base_url": "$SUBSCRIPTION_BASE_URL",
   "subscription_bind_host": "$SUBSCRIPTION_BIND_HOST",
   "subscription_bind_port": $SUBSCRIPTION_BIND_PORT,
@@ -798,7 +802,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.41"
+  ua="SaharInstaller/0.1.46"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -928,7 +932,7 @@ enable_services() {
     fi
   fi
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    if ! su -s /bin/sh "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"; then
+    if ! SAHAR_CONFIG='$APP_DATA_DIR/config.json' "$VENV_DIR/bin/python" "$APP_APP_DIR/register_local_server.py"; then
       echo "Local node registration failed. See $APP_LOG_DIR/provision.log" >&2
       return 1
     fi

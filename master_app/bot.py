@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from functools import wraps
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -34,6 +34,7 @@ from agent_client import AgentClient
 from backup_manager import BackupManager
 from provisioner import ProvisionError, SSHProvisioner
 from cloudflare_manager import CloudflareError, CloudflareManager
+from cloudflared_runtime import CloudflaredRuntimeError, deploy_local_service
 from db import Database
 from error_tools import record_error
 from utils import (
@@ -50,6 +51,7 @@ from utils import (
     valid_server_name,
     valid_username,
     write_qr_file,
+    parse_admin_ids,
 )
 
 CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json')
@@ -104,6 +106,10 @@ EDITABLE_SETTINGS = {
     'cloudflare_domain_name': {'label': 'دامنه کلودفلر', 'type': 'text', 'allow_empty': True},
     'cloudflare_base_subdomain': {'label': 'ساب‌دامین پایه', 'type': 'text', 'allow_empty': True},
     'cloudflare_dns_proxied': {'label': 'پروکسی کلودفلر', 'type': 'bool'},
+    'cloudflare_tunnel_enabled': {'label': 'تانل کلودفلر', 'type': 'bool'},
+    'cloudflare_auto_sync_enabled': {'label': 'سینک خودکار کلودفلر', 'type': 'bool'},
+    'cloudflare_auto_sync_interval_minutes': {'label': 'فاصله سینک کلودفلر (دقیقه)', 'type': 'int', 'min': 5, 'max': 1440},
+    'notify_on_server_status_change': {'label': 'هشدار تغییر وضعیت سرور', 'type': 'bool'},
     'cloudflare_api_token': {'label': 'توکن API کلودفلر', 'type': 'secret'},
 }
 
@@ -501,6 +507,27 @@ def subscription_url_for_user(username: str) -> str:
     return f'{base}/sub/{token}'
 
 
+def subscription_raw_url_for_user(username: str) -> str:
+    token = DB.get_subscription_token(username)
+    if not token:
+        token = DB.ensure_subscription_token(username, secrets.token_urlsafe(24), now_iso())
+    base = (config.get('subscription_base_url') or '').rstrip('/')
+    if not base:
+        bind_host = str(config.get('subscription_bind_host') or '127.0.0.1').strip()
+        bind_port = config.get('subscription_bind_port') or 8080
+        host = bind_host
+        if bind_host in {'0.0.0.0', '::', '', '127.0.0.1', 'localhost'}:
+            host = _detect_public_ipv4() or bind_host
+        base = f'http://{host}:{bind_port}'
+    return f'{base}/sub-raw/{token}'
+
+
+def regenerate_subscription_token_for_user(username: str) -> str:
+    token = DB.rotate_subscription_token(username, secrets.token_urlsafe(24), now_iso())
+    audit('rotate_subscription', 'user', username, '')
+    return token
+
+
 def set_user_access_all(user: Dict[str, Any], provision: bool = True) -> None:
     username = user['username']
     DB.set_user_access_mode(username, 'all', now_iso())
@@ -533,6 +560,11 @@ def delete_server_dns(server: Dict[str, Any]) -> None:
         return
     try:
         CLOUDFLARE.delete_server_dns(server)
+        if server.get('cf_tunnel_id'):
+            try:
+                CLOUDFLARE.delete_tunnel(str(server.get('cf_tunnel_id')))
+            except Exception:
+                LOGGER.exception('delete_server_tunnel_failed server=%s', server.get('name'))
     except Exception:
         LOGGER.exception('delete_server_dns_failed server=%s', server.get('name'))
 
@@ -548,33 +580,116 @@ def _resolve_target_ip_for_dns(host: str) -> str:
             raise CloudflareError(f'failed to resolve SSH host to IPv4: {host}') from exc
 
 
+def _is_local_server(server: Dict[str, Any]) -> bool:
+    api_url = str(server.get('api_url') or '')
+    if server.get('name') == config.get('local_server_name'):
+        return True
+    return api_url.startswith('http://127.0.0.1:') or api_url.startswith('http://localhost:')
+
+
+def _cloudflare_service_url_for_server(server: Dict[str, Any]) -> str:
+    xray_port = int(server.get('xray_port') or 0)
+    if xray_port <= 0:
+        raise CloudflareError(f"server {server.get('name')} does not have a valid xray port")
+    return f'http://127.0.0.1:{xray_port}'
+
+
+def _apply_cloudflare_dns_to_server(server: Dict[str, Any], info: Dict[str, str], *, tunnel: bool) -> Dict[str, Any]:
+    updated = DB.get_server(server['name']) or dict(server)
+    updated['cf_zone_id'] = info.get('zone_id', '')
+    updated['cf_record_id'] = info.get('record_id', '')
+    updated['cf_record_type'] = info.get('record_type', '')
+    updated['cf_dns_name'] = info.get('dns_name', '')
+    if tunnel:
+        updated['cf_tunnel_id'] = info.get('tunnel_id', updated.get('cf_tunnel_id', ''))
+        updated['cf_tunnel_name'] = info.get('tunnel_name', updated.get('cf_tunnel_name', ''))
+        updated['cf_tunnel_status'] = 'configured'
+        updated['transport_mode'] = 'ws'
+    DB.add_or_update_server(updated)
+    return DB.get_server(server['name']) or updated
+
+
+def _sync_cloudflare_for_server(server: Dict[str, Any], *, deploy_runtime_if_local: bool = True) -> Dict[str, str]:
+    if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
+        info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
+        tunnel_status = 'configured'
+        if _is_local_server(server) and deploy_runtime_if_local:
+            try:
+                deploy_local_service(info['tunnel_token'])
+            except CloudflaredRuntimeError as exc:
+                tunnel_status = 'pending_runtime'
+                LOGGER.warning('cloudflared_runtime_pending server=%s error=%s', server.get('name'), exc)
+        DB.update_server_tunnel(server['name'], info['tunnel_id'], info['tunnel_name'], tunnel_status, now_iso())
+        DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+        return info
+    target = str(server.get('public_host') or '').strip()
+    if not target:
+        raise CloudflareError('server public host is empty')
+    target_ip = _resolve_target_ip_for_dns(target)
+    info = CLOUDFLARE.ensure_server_dns(server['name'], target_ip)
+    DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+    return info
+
+
+def sync_cloudflare_records() -> tuple[int, list[str]]:
+    if not getattr(CLOUDFLARE, 'enabled', False):
+        return 0, []
+    synced: list[str] = []
+    for server in DB.list_servers(enabled_only=True):
+        try:
+            info = _sync_cloudflare_for_server(server)
+            synced.append(info['dns_name'])
+        except (CloudflareError, CloudflaredRuntimeError):
+            LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
+        except Exception:
+            LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
+    return len(synced), synced
+
+
 def do_add_server_via_ssh(name: str, host: str, ssh_port: int, ssh_username: str, ssh_password: str) -> str:
     project_root = Path(CONFIG_PATH).resolve().parent.parent
     mark_server_stage(name, 'provisioning', 'connecting over ssh')
     provisioner = SSHProvisioner(project_root=project_root, timeout=AGENT_TIMEOUT)
-    api_url, api_token, _health = provisioner.provision_agent(
-        server_name=name,
-        host=host,
-        ssh_port=ssh_port,
-        ssh_username=ssh_username,
-        ssh_password=ssh_password,
-    )
+    tunnel_info: Dict[str, str] = {}
+    tunnel_token = ''
+    if getattr(CLOUDFLARE, 'tunnel_enabled', False):
+        try:
+            tunnel_info = CLOUDFLARE.ensure_remote_tunnel(name, 'http://127.0.0.1:443')
+            tunnel_token = tunnel_info.get('tunnel_token', '')
+        except Exception:
+            LOGGER.exception('cloudflare_tunnel_prepare_failed server=%s', name)
+            tunnel_info = {}
+            tunnel_token = ''
+    try:
+        api_url, api_token, _health = provisioner.provision_agent(
+            server_name=name,
+            host=host,
+            ssh_port=ssh_port,
+            ssh_username=ssh_username,
+            ssh_password=ssh_password,
+            cloudflared_tunnel_token=tunnel_token,
+        )
+    except Exception:
+        if tunnel_info.get('tunnel_id'):
+            try:
+                CLOUDFLARE.delete_tunnel(tunnel_info['tunnel_id'])
+            except Exception:
+                LOGGER.exception('cloudflare_tunnel_cleanup_failed server=%s', name)
+        raise
     result = do_add_server(name, api_url, api_token)
     server = DB.get_server(name)
     if server:
         try:
-            target_ip = _resolve_target_ip_for_dns(host)
-            dns_info = CLOUDFLARE.ensure_server_dns(name, target_ip)
-            updated = DB.get_server(name) or server
-            updated['cf_zone_id'] = dns_info.get('zone_id', '')
-            updated['cf_record_id'] = dns_info.get('record_id', '')
-            updated['cf_dns_name'] = dns_info.get('dns_name', '')
-            updated['public_host'] = dns_info.get('dns_name') or updated.get('public_host') or host
-            DB.add_or_update_server(updated)
+            if tunnel_info:
+                updated = _apply_cloudflare_dns_to_server(server, tunnel_info, tunnel=True)
+                DB.update_server_tunnel(updated['name'], tunnel_info.get('tunnel_id', ''), tunnel_info.get('tunnel_name', ''), 'configured', now_iso())
+            else:
+                target_ip = _resolve_target_ip_for_dns(host)
+                dns_info = CLOUDFLARE.ensure_server_dns(name, target_ip)
+                DB.update_server_dns(name, dns_info['zone_id'], dns_info['record_id'], dns_info['dns_name'], now_iso(), dns_info.get('record_type', ''))
         except Exception:
             LOGGER.exception('cloudflare_ensure_failed server=%s', name)
     return result
-
 
 def _menu_button(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text, callback_data=data)
@@ -618,7 +733,8 @@ def servers_page_markup(servers: List[Dict[str, Any]], page: int) -> InlineKeybo
 def user_detail_markup(user: Dict[str, Any]) -> InlineKeyboardMarkup:
     username = user['username']
     return InlineKeyboardMarkup([
-        [_menu_button('📡 سابسکریپشن', f'act:subscription:{username}'), _menu_button('🔗 لینک مستقیم', f'act:link:{username}')],
+        [_menu_button('📡 سابسکریپشن', f'act:subscription:{username}'), _menu_button('🧾 خام', f'act:subscription_raw:{username}')],
+        [_menu_button('♻️ لینک جدید', f'act:subscription_rotate:{username}'), _menu_button('🔗 لینک مستقیم', f'act:link:{username}')],
         [_menu_button('📷 QR', f'act:qr:{username}')],
         [_menu_button('♻️ ریست مصرف', f'act:reset_usage:{username}'), _menu_button('⛔ غیرفعال', f'act:confirm:disable:{username}')],
         [_menu_button('✅ فعال', f'act:enable:{username}'), _menu_button('🗑 حذف', f'act:confirm:delete:{username}')],
@@ -630,6 +746,8 @@ def server_detail_markup(server: Dict[str, Any]) -> InlineKeyboardMarkup:
     sid = int(server['id'])
     rows = [
         [_menu_button('💚 Health', f'act:server_health:{sid}'), _menu_button('👥 کاربران', f'act:server_users:{sid}')],
+        [_menu_button('🧩 پروفایل‌ها', f'act:server_profiles:{sid}'), _menu_button('☁️ سینک DNS', f'act:server_dns_refresh:{sid}')],
+        [_menu_button('⚙️ وضعیت Xray', f'act:server_xray_status:{sid}'), _menu_button('📜 لاگ‌ها', f'act:server_logs:{sid}')],
         [_menu_button('✅ فعال', f'act:enable_server:{sid}'), _menu_button('⛔ غیرفعال', f'act:confirm:disable_server:{sid}')],
         [_menu_button('🗑 حذف', f'act:confirm:remove_server:{sid}')],
         [_menu_button('🏠 خانه', 'menu:home')],
@@ -650,7 +768,7 @@ def tools_menu_markup() -> InlineKeyboardMarkup:
         [_menu_button('💾 بکاپ', 'tool:backup_now'), _menu_button('📤 ارسال بکاپ', 'tool:send_backup')],
         [_menu_button('📄 CSV کاربران', 'tool:export_users'), _menu_button('📊 وضعیت', 'tool:status')],
         [_menu_button('🛡 ادمین‌ها', 'tool:list_admins'), _menu_button('📦 پلن‌ها', 'tool:list_plans')],
-        [_menu_button('☁️ کلودفلر', 'tool:cloudflare')],
+        [_menu_button('☁️ کلودفلر', 'tool:cloudflare'), _menu_button('🩺 Doctor', 'tool:doctor')],
         [_menu_button('🏠 خانه', 'menu:home')],
     ])
 
@@ -780,6 +898,10 @@ def settings_menu_markup() -> InlineKeyboardMarkup:
         'cloudflare_domain_name',
         'cloudflare_base_subdomain',
         'cloudflare_dns_proxied',
+        'cloudflare_tunnel_enabled',
+        'cloudflare_auto_sync_enabled',
+        'cloudflare_auto_sync_interval_minutes',
+        'notify_on_server_status_change',
         'cloudflare_api_token',
     ]
     rows = [[_menu_button(f"⚙️ {EDITABLE_SETTINGS[key]['label']}", f'setting:edit:{key}')] for key in order]
@@ -802,8 +924,7 @@ def refresh_runtime_config() -> None:
     config['admin_ids'] = parse_admin_ids(config.get('admin_chat_ids', ''))
     ADMIN_IDS = set(config.get('admin_ids') or [])
     AGENT_TIMEOUT = int(config.get('agent_timeout_seconds', 15))
-    CLOUDFLARE.config = config
-    CLOUDFLARE.enabled = bool(config.get('cloudflare_enabled')) and bool(config.get('cloudflare_domain_name') or config.get('cloudflare_zone_name'))
+    CLOUDFLARE.reload(config)
 
 
 def persist_master_config() -> None:
@@ -857,6 +978,7 @@ def apply_setting_change(key: str, value: Any) -> str:
     config[key] = value
     if key == 'cloudflare_domain_name':
         config['cloudflare_zone_name'] = value
+        CLOUDFLARE.clear_cached_ids()
     persist_master_config()
     refresh_runtime_config()
     services = tuple(meta.get('services') or ())
@@ -873,8 +995,12 @@ def cloudflare_menu_markup() -> InlineKeyboardMarkup:
         [_menu_button('🌐 دامنه', 'setting:edit:cloudflare_domain_name')],
         [_menu_button('🧩 ساب‌دامین پایه', 'setting:edit:cloudflare_base_subdomain')],
         [_menu_button('🛡 پروکسی DNS', 'setting:edit:cloudflare_dns_proxied')],
+        [_menu_button('🚇 تانل خودکار', 'setting:edit:cloudflare_tunnel_enabled')],
+        [_menu_button('🔄 سینک خودکار', 'setting:edit:cloudflare_auto_sync_enabled')],
+        [_menu_button('⏱ فاصله سینک', 'setting:edit:cloudflare_auto_sync_interval_minutes')],
         [_menu_button('🔑 توکن API', 'setting:edit:cloudflare_api_token')],
-        [_menu_button('🔄 سینک DNS سرورها', 'act:cloudflare_sync_all')],
+        [_menu_button('🧪 تست اتصال', 'act:cloudflare_test')],
+        [_menu_button('🔄 سینک کلودفلر سرورها', 'act:cloudflare_sync_all')],
         [_menu_button('↩️ ابزارها', 'menu:tools'), _menu_button('🏠 خانه', 'menu:home')],
     ])
 
@@ -886,6 +1012,10 @@ def cloudflare_text() -> str:
         f"• دامنه: <code>{config.get('cloudflare_domain_name') or '-'}</code>",
         f"• ساب‌دامین پایه: <code>{config.get('cloudflare_base_subdomain') or '-'}</code>",
         f"• پروکسی: <code>{'on' if config.get('cloudflare_dns_proxied') else 'off'}</code>",
+        f"• تانل خودکار: <code>{'on' if config.get('cloudflare_tunnel_enabled') else 'off'}</code>",
+        f"• سینک خودکار: <code>{'on' if config.get('cloudflare_auto_sync_enabled', True) else 'off'}</code>",
+        f"• فاصله سینک: <code>{config.get('cloudflare_auto_sync_interval_minutes', 30)}</code> دقیقه",
+        f"• هشدار تغییر وضعیت سرور: <code>{'on' if config.get('notify_on_server_status_change', True) else 'off'}</code>",
         f"• توکن: <code>{token_state}</code>",
     ]
     return list_text('مدیریت Cloudflare', lines)
@@ -894,21 +1024,6 @@ def cloudflare_text() -> str:
 async def show_cloudflare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await respond(update, cloudflare_text(), cloudflare_menu_markup())
 
-
-def sync_cloudflare_records() -> tuple[int, list[str]]:
-    synced = []
-    for server in DB.list_servers(enabled_only=True):
-        target = str(server.get('public_host') or '').strip()
-        if not target:
-            continue
-        try:
-            target_ip = _resolve_target_ip_for_dns(target)
-            info = CLOUDFLARE.ensure_server_dns(server['name'], target_ip)
-            DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso())
-            synced.append(info['dns_name'])
-        except Exception:
-            LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
-    return len(synced), synced
 
 
 async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -983,6 +1098,23 @@ def xray_status_text(server_name: str) -> str:
         return summarize_error(code, f'خطا در وضعیت Xray سرور {server_name}')
 
 
+def server_profiles_text(server_name: str) -> str:
+    server = DB.get_server(server_name)
+    if not server:
+        return '❌ سرور پیدا نشد'
+    try:
+        profiles = server_client(server).profiles().get('data', {}).get('profiles', [])
+    except Exception as exc:
+        code = record_error(DB, LOGGER, component='agent', target_type='server', target_key=server_name, message='server profiles failed', exc=exc)
+        return summarize_error(code, f'خطا در دریافت پروفایل‌های سرور {server_name}')
+    lines = []
+    for profile in profiles:
+        lines.append(
+            f"• {profile.get('display_name') or profile.get('profile_key')} | host={profile.get('public_host') or '-'} | port={profile.get('port') or '-'} | transport={profile.get('transport_mode') or '-'} | path={profile.get('ws_path') or '-'}"
+        )
+    return list_text(f"پروفایل‌های سرور {server_name}", lines)
+
+
 def health_report_text() -> str:
     servers = DB.list_servers()
     if not servers:
@@ -994,11 +1126,41 @@ def health_report_text() -> str:
         lines.append(f"   CPU {server.get('cpu_percent', 0)}% | RAM {server.get('memory_percent', 0)}% | Disk {server.get('disk_percent', 0)}% | Users {server.get('user_count', 0)}")
     return '\n'.join(lines)
 
+
+def doctor_text() -> str:
+    token_state = 'set' if config.get('bot_token') else 'missing'
+    cf_state = 'enabled' if config.get('cloudflare_enabled') else 'disabled'
+    cf_token_state = 'set' if CLOUDFLARE.get_token() else 'missing'
+    servers = DB.list_servers()
+    enabled_servers = [s for s in servers if s.get('enabled')]
+    down_servers = [s['name'] for s in servers if (s.get('last_health_status') or '') == 'down']
+    owner_count = DB.count_admins_by_role('owner')
+    return '\n'.join([
+        '<b>Doctor / عیب‌یابی سریع</b>',
+        '',
+        f'• نسخه: <code>{config.get("package_version") or "-"}</code>',
+        f'• Bot token: <code>{token_state}</code>',
+        f'• Owner count: <code>{owner_count}</code>',
+        f'• Server count: <code>{len(servers)}</code>',
+        f'• Enabled servers: <code>{len(enabled_servers)}</code>',
+        f'• Down servers: <code>{", ".join(down_servers) if down_servers else "-"}</code>',
+        f'• Cloudflare: <code>{cf_state}</code>',
+        f'• Cloudflare token: <code>{cf_token_state}</code>',
+        f'• Cloudflare domain: <code>{config.get("cloudflare_domain_name") or "-"}</code>',
+        f'• Tunnel mode: <code>{"on" if config.get("cloudflare_tunnel_enabled") else "off"}</code>',
+        f'• Auto sync: <code>{"on" if config.get("cloudflare_auto_sync_enabled", True) else "off"}</code>',
+        f'• Subscription base: <code>{config.get("subscription_base_url") or "auto"}</code>',
+        f'• Local node: <code>{"on" if config.get("local_node_enabled") else "off"}</code>',
+    ])
+
+
 def user_text(user: Dict[str, Any]) -> str:
     direct_link = build_vless_link(user)
     subscription_link = subscription_url_for_user(user['username'])
+    raw_subscription_link = subscription_raw_url_for_user(user['username'])
     direct_link_html = html.escape(direct_link)
     subscription_link_html = html.escape(subscription_link)
+    raw_subscription_link_html = html.escape(raw_subscription_link)
     return (
         f"<b>کاربر: {user['username']}</b>\n"
         f"🖥 سرور: {user['server_name']}\n"
@@ -1010,7 +1172,8 @@ def user_text(user: Dict[str, Any]) -> str:
         f"🏷 پلن: {resolve_plan_label(user.get('plan') or '')}\n"
         f"📌 یادداشت: {user.get('notes') or '-'}\n"
         f"🔘 وضعیت: {'فعال' if user['is_active'] else 'غیرفعال'}\n\n"
-        f"📡 سابسکریپشن: <code>{subscription_link_html}</code>\n\n"
+        f"📡 سابسکریپشن: <code>{subscription_link_html}</code>\n"
+        f"🧾 سابسکریپشن خام: <code>{raw_subscription_link_html}</code>\n\n"
         f"🔗 لینک مستقیم: <code>{direct_link_html}</code>"
     )
 def server_text(server: Dict[str, Any]) -> str:
@@ -1026,6 +1189,8 @@ def server_text(server: Dict[str, Any]) -> str:
         f"⏰ Last check: {server.get('last_health_at') or '-'}\n"
         f"🧠 CPU: {server.get('cpu_percent', 0)}% | RAM: {server.get('memory_percent', 0)}% | Disk: {server.get('disk_percent', 0)}%\n"
         f"📈 Load: {server.get('load_1m', 0)} | 👥 Users: {server.get('user_count', 0)} | 🔄 Last sync: {server.get('last_sync_at') or '-'}\n"
+        f"☁️ DNS: {server.get('cf_dns_name') or '-'}\n"
+        f"🚇 Tunnel: {server.get('cf_tunnel_name') or '-'} | {server.get('cf_tunnel_status') or '-'}\n"
         f"🧭 مرحله: {server.get('provisioning_state') or '-'}\n"
         f"💬 پیام مرحله: {server.get('provisioning_message') or '-'}\n"
         f"🔘 وضعیت: {'فعال' if server['enabled'] else 'غیرفعال'}"
@@ -1166,28 +1331,35 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
     if not valid_server_name(name):
         return '❌ نام سرور نامعتبر است.'
     created_at = now_iso()
-    existing = DB.get_server(name)
+    existing = DB.get_server(name) or {}
     DB.add_or_update_server(
         {
             'name': name,
             'api_url': api_url,
             'api_token': api_token,
-            'public_host': existing.get('public_host', '') if existing else '',
-            'host_mode': existing.get('host_mode', '') if existing else '',
-            'xray_port': int(existing.get('xray_port') or 0) if existing else 0,
-            'transport_mode': existing.get('transport_mode', 'ws') if existing else 'ws',
-            'ws_path': existing.get('ws_path', '/ws') if existing else '/ws',
-            'reality_server_name': existing.get('reality_server_name', '') if existing else '',
-            'reality_public_key': existing.get('reality_public_key', '') if existing else '',
-            'reality_short_id': existing.get('reality_short_id', '') if existing else '',
-            'fingerprint': existing.get('fingerprint', 'chrome') if existing else 'chrome',
+            'public_host': existing.get('public_host', ''),
+            'host_mode': existing.get('host_mode', ''),
+            'xray_port': int(existing.get('xray_port') or 0),
+            'transport_mode': existing.get('transport_mode', 'ws'),
+            'ws_path': existing.get('ws_path', '/ws'),
+            'reality_server_name': existing.get('reality_server_name', ''),
+            'reality_public_key': existing.get('reality_public_key', ''),
+            'reality_short_id': existing.get('reality_short_id', ''),
+            'fingerprint': existing.get('fingerprint', 'chrome'),
+            'cf_zone_id': existing.get('cf_zone_id', ''),
+            'cf_record_id': existing.get('cf_record_id', ''),
+            'cf_record_type': existing.get('cf_record_type', ''),
+            'cf_dns_name': existing.get('cf_dns_name', ''),
+            'cf_tunnel_id': existing.get('cf_tunnel_id', ''),
+            'cf_tunnel_name': existing.get('cf_tunnel_name', ''),
+            'cf_tunnel_status': existing.get('cf_tunnel_status', ''),
             'enabled': True,
-            'last_health_status': existing.get('last_health_status', '') if existing else '',
-            'last_health_message': existing.get('last_health_message', '') if existing else '',
-            'last_health_at': existing.get('last_health_at', '') if existing else '',
+            'last_health_status': existing.get('last_health_status', ''),
+            'last_health_message': existing.get('last_health_message', ''),
+            'last_health_at': existing.get('last_health_at', ''),
             'provisioning_state': 'verifying',
             'provisioning_message': 'verifying agent health',
-            'created_at': existing['created_at'] if existing else created_at,
+            'created_at': existing.get('created_at', created_at),
             'updated_at': now_iso(),
         }
     )
@@ -1199,16 +1371,23 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
                 'name': name,
                 'api_url': api_url,
                 'api_token': api_token,
-                'public_host': health.get('public_host', ''),
-                'host_mode': health.get('host_mode', ''),
-                'xray_port': int(health.get('simple_port') or health.get('xray_port') or 0),
-                'reality_port': int(health.get('reality_port') or 0),
-                'transport_mode': health.get('transport_mode', 'ws'),
-                'ws_path': health.get('ws_path', '/ws'),
-                'reality_server_name': health.get('reality_server_name', ''),
-                'reality_public_key': health.get('reality_public_key', ''),
-                'reality_short_id': health.get('reality_short_id', ''),
-                'fingerprint': health.get('fingerprint', 'chrome'),
+                'public_host': health.get('public_host', existing.get('public_host', '')),
+                'host_mode': health.get('host_mode', existing.get('host_mode', '')),
+                'xray_port': int(health.get('simple_port') or health.get('xray_port') or existing.get('xray_port') or 0),
+                'reality_port': int(health.get('reality_port') or existing.get('reality_port') or 0),
+                'transport_mode': health.get('transport_mode', existing.get('transport_mode', 'ws')),
+                'ws_path': health.get('ws_path', existing.get('ws_path', '/ws')),
+                'reality_server_name': health.get('reality_server_name', existing.get('reality_server_name', '')),
+                'reality_public_key': health.get('reality_public_key', existing.get('reality_public_key', '')),
+                'reality_short_id': health.get('reality_short_id', existing.get('reality_short_id', '')),
+                'fingerprint': health.get('fingerprint', existing.get('fingerprint', 'chrome')),
+                'cf_zone_id': existing.get('cf_zone_id', ''),
+                'cf_record_id': existing.get('cf_record_id', ''),
+                'cf_record_type': existing.get('cf_record_type', ''),
+                'cf_dns_name': existing.get('cf_dns_name', ''),
+                'cf_tunnel_id': existing.get('cf_tunnel_id', ''),
+                'cf_tunnel_name': existing.get('cf_tunnel_name', ''),
+                'cf_tunnel_status': existing.get('cf_tunnel_status', ''),
                 'enabled': True,
                 'last_health_status': 'ok',
                 'last_health_message': '',
@@ -1216,18 +1395,26 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
                 'xray_active': bool(health.get('xray_active', True)),
                 'provisioning_state': 'healthy',
                 'provisioning_message': 'agent verified successfully',
-                'created_at': existing['created_at'] if existing else created_at,
+                'created_at': existing.get('created_at', created_at),
                 'updated_at': now_iso(),
             }
         )
         fresh_server = DB.get_server(name)
+        if getattr(CLOUDFLARE, 'enabled', False):
+            try:
+                _sync_cloudflare_for_server(fresh_server, deploy_runtime_if_local=False)
+                fresh_server = DB.get_server(name) or fresh_server
+            except Exception:
+                LOGGER.exception('cloudflare_sync_after_add_failed server=%s', name)
         for existing_user in DB.list_users_by_access_mode('all'):
             try:
                 server_client(fresh_server).add_user(existing_user['username'], existing_user['uuid'])
             except Exception:
                 LOGGER.exception('provision_all_mode_user_failed user=%s server=%s', existing_user['username'], name)
         audit('add_server', 'server', name, api_url)
-        return f"✅ سرور ذخیره شد: {name} → {health.get('public_host')}:{health.get('xray_port')}"
+        display_host = fresh_server.get('cf_dns_name') or health.get('public_host') or '-'
+        display_port = 443 if fresh_server.get('cf_dns_name') else (health.get('xray_port') or health.get('simple_port') or fresh_server.get('xray_port') or '-')
+        return f"✅ سرور ذخیره شد: {name} → {display_host}:{display_port}"
     except Exception as exc:
         mark_server_stage(name, 'failed', str(exc))
         code = record_error(DB, LOGGER, component='agent', target_type='server', target_key=name, message='add server failed', exc=exc)
@@ -1251,6 +1438,47 @@ async def server_health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     await send_temp(update, list_text(f"سلامت سرور {context.args[0]}", [f'{k}: {v}' for k, v in health.items()]))
 
+
+
+@admin_only
+async def dns_refresh_server_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 1:
+        await send_temp(update, 'فرمت درست: /dns_refresh_server <name>')
+        return
+    server = DB.get_server(context.args[0])
+    if not server:
+        await send_temp(update, '❌ سرور پیدا نشد')
+        return
+    try:
+        info = _sync_cloudflare_for_server(server)
+        if info.get('tunnel_id'):
+            await send_temp(update, f"✅ کلودفلر سرور <b>{html.escape(server['name'])}</b> روی <code>{html.escape(info['dns_name'])}</code> تنظیم شد")
+        else:
+            await send_temp(update, f"✅ DNS سرور <b>{html.escape(server['name'])}</b> روی <code>{html.escape(info['dns_name'])}</code> به‌روزرسانی شد")
+    except Exception as exc:
+        await send_temp(update, f'❌ خطا در تنظیم کلودفلر: {html.escape(str(exc))}')
+
+
+@admin_only
+async def server_profiles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 1:
+        await send_temp(update, 'فرمت درست: /server_profiles <name>')
+        return
+    server = DB.get_server(context.args[0])
+    if not server:
+        await send_temp(update, '❌ سرور پیدا نشد')
+        return
+    try:
+        profiles = server_client(server).profiles().get('data', {}).get('profiles', [])
+    except Exception as exc:
+        await send_temp(update, f'❌ خطا در دریافت پروفایل‌ها: {html.escape(str(exc))}')
+        return
+    lines = []
+    for profile in profiles:
+        lines.append(
+            f"• {profile.get('display_name') or profile.get('profile_key')} | host={profile.get('public_host') or '-'} | port={profile.get('port') or '-'} | transport={profile.get('transport_mode') or '-'} | path={profile.get('ws_path') or '-'}"
+        )
+    await send_temp(update, list_text(f"پروفایل‌های سرور {server['name']}", lines))
 
 @role_required('admin')
 async def new_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1309,6 +1537,20 @@ async def subscription_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await send_temp(update, '❌ کاربر پیدا نشد')
         return
     await send_temp(update, f"🔗 لینک ثابت سابسکریپشن: <code>{html.escape(subscription_url_for_user(username))}</code>")
+
+
+@admin_only
+async def regen_subscription_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 1:
+        await send_temp(update, 'فرمت درست: /regen_subscription <username>')
+        return
+    username = context.args[0]
+    user = DB.get_user(username)
+    if not user:
+        await send_temp(update, '❌ کاربر پیدا نشد')
+        return
+    regenerate_subscription_token_for_user(username)
+    await send_temp(update, f"♻️ لینک جدید سابسکریپشن: <code>{html.escape(subscription_url_for_user(username))}</code>")
 
 
 @role_required('admin')
@@ -1507,6 +1749,11 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @role_required('owner')
 async def cloudflare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_cloudflare(update, context)
+
+
+@role_required('support')
+async def doctor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_temp(update, doctor_text())
 
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1809,6 +2056,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_tools(update, context)
         elif data == 'tool:cloudflare':
             await show_cloudflare(update, context)
+        elif data == 'tool:doctor':
+            await doctor_cmd(update, context)
         elif data == 'menu:help':
             await show_help(update, context)
         elif data.startswith('user:'):
@@ -1841,6 +2090,19 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             user = DB.get_user(username)
             if user:
                 await send_temp(update, f"<code>{html.escape(subscription_url_for_user(username))}</code>")
+        elif data.startswith('act:subscription_raw:'):
+            username = data.split(':', 2)[2]
+            user = DB.get_user(username)
+            if user:
+                await send_temp(update, f"<code>{html.escape(subscription_raw_url_for_user(username))}</code>")
+        elif data.startswith('act:subscription_rotate:'):
+            if await deny_if_not_admin(update, 'admin'):
+                return
+            username = data.split(':', 2)[2]
+            user = DB.get_user(username)
+            if user:
+                regenerate_subscription_token_for_user(username)
+                await send_temp(update, f"♻️ لینک جدید: <code>{html.escape(subscription_url_for_user(username))}</code>")
         elif data == 'act:cloudflare_sync_all':
             if await deny_if_not_admin(update, 'owner'):
                 return
@@ -1926,6 +2188,41 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if server:
                 users = DB.list_users(server['name'])
                 await respond(update, list_text(f"کاربران سرور {server['name']}", [format_user_brief(u) for u in users]), InlineKeyboardMarkup([[InlineKeyboardButton('↩️ برگشت', callback_data=f'server:{server_id}')]]))
+        elif data.startswith('act:server_profiles:'):
+            server_id = int(data.split(':', 2)[2])
+            server = DB.get_server_by_id(server_id)
+            if server:
+                await send_temp(update, server_profiles_text(server['name']))
+        elif data.startswith('act:server_dns_refresh:'):
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            server_id = int(data.split(':', 2)[2])
+            server = DB.get_server_by_id(server_id)
+            if server:
+                try:
+                    if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
+                        info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
+                        if _is_local_server(server):
+                            deploy_local_service(info['tunnel_token'])
+                        DB.update_server_tunnel(server['name'], info['tunnel_id'], info['tunnel_name'], 'configured', now_iso())
+                        DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+                    else:
+                        target = str(server.get('public_host') or '').strip()
+                        info = CLOUDFLARE.ensure_server_dns(server['name'], _resolve_target_ip_for_dns(target))
+                        DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+                    await send_temp(update, f"✅ Cloudflare برای {server['name']} همگام شد. <code>{html.escape(info.get('dns_name', '-'))}</code>")
+                except Exception as exc:
+                    await send_temp(update, f"❌ خطا در همگام‌سازی Cloudflare: <code>{html.escape(str(exc))}</code>")
+        elif data.startswith('act:server_xray_status:'):
+            server_id = int(data.split(':', 2)[2])
+            server = DB.get_server_by_id(server_id)
+            if server:
+                await send_temp(update, xray_status_text(server['name']))
+        elif data.startswith('act:server_logs:'):
+            server_id = int(data.split(':', 2)[2])
+            server = DB.get_server_by_id(server_id)
+            if server:
+                await send_temp(update, server_logs_text(server['name']))
         elif data == 'report:expired':
             await expired_users_cmd(update, context)
         elif data == 'report:quota':
@@ -2270,18 +2567,13 @@ def main() -> None:
     application.add_handler(CommandHandler('status', status_cmd))
     application.add_handler(CommandHandler('add_server', add_server_cmd))
     application.add_handler(CommandHandler('add_server_ssh', add_server_ssh_cmd))
-    if 'dns_refresh_server_cmd' in globals():
-        application.add_handler(CommandHandler('dns_refresh_server', dns_refresh_server_cmd))
-    else:
-        LOGGER.warning('dns_refresh_server_cmd is not defined; skipping handler registration')
+    application.add_handler(CommandHandler('dns_refresh_server', dns_refresh_server_cmd))
     application.add_handler(CommandHandler('list_servers', list_servers_cmd))
     application.add_handler(CommandHandler('server_health', server_health_cmd))
-    if 'server_profiles_cmd' in globals():
-        application.add_handler(CommandHandler('server_profiles', server_profiles_cmd))
-    else:
-        LOGGER.warning('server_profiles_cmd is not defined; skipping handler registration')
+    application.add_handler(CommandHandler('server_profiles', server_profiles_cmd))
     application.add_handler(CommandHandler('new_user', new_user_cmd))
     application.add_handler(CommandHandler('subscription', subscription_cmd))
+    application.add_handler(CommandHandler('regen_subscription', regen_subscription_cmd))
     application.add_handler(CommandHandler('set_access_all', set_access_all_cmd))
     application.add_handler(CommandHandler('set_access_selected', set_access_selected_cmd))
     application.add_handler(CommandHandler('grant_server', grant_server_cmd))
@@ -2306,6 +2598,7 @@ def main() -> None:
     application.add_handler(CommandHandler('list_plans', list_plans_cmd))
     application.add_handler(CommandHandler('settings', settings_cmd))
     application.add_handler(CommandHandler('cloudflare', cloudflare_cmd))
+    application.add_handler(CommandHandler('doctor', doctor_cmd))
     application.add_handler(CommandHandler('add_admin', add_admin_cmd))
     application.add_handler(CommandHandler('remove_admin', remove_admin_cmd))
     application.add_handler(CommandHandler('cancel', cancel_cmd))

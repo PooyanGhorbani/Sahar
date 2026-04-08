@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import time
 from datetime import datetime, timedelta
 
 from agent_client import AgentClient
 from backup_manager import BackupManager
+from cloudflare_manager import CloudflareManager
+from cloudflared_runtime import CloudflaredRuntimeError, deploy_local_service
 from db import Database
 from error_tools import record_error
 from notifier import Notifier
@@ -18,6 +21,11 @@ setup_logging(CONFIG['log_path'])
 LOGGER = logging.getLogger('scheduler')
 DB = Database(CONFIG['database_path'])
 NOTIFIER = Notifier(CONFIG['bot_token'], CONFIG['admin_ids'])
+CLOUDFLARE = CloudflareManager(CONFIG, DB)
+
+SERVER_STATUS_ALERTS = bool(CONFIG.get('notify_on_server_status_change', True))
+CLOUDFLARE_AUTO_SYNC = bool(CONFIG.get('cloudflare_auto_sync_enabled', True))
+CLOUDFLARE_AUTO_SYNC_MINUTES = int(CONFIG.get('cloudflare_auto_sync_interval_minutes', 30) or 30)
 
 
 def _server_summary_for_user(username: str) -> str:
@@ -52,42 +60,135 @@ def accessible_servers_for_user(user: dict) -> list[dict]:
     return DB.list_user_access_servers(user['username'], enabled_only=True)
 
 
+
+def _notify_server_status_change(server: dict, old_status: str, new_status: str, message: str = '') -> None:
+    if not SERVER_STATUS_ALERTS or old_status == new_status:
+        return
+    if new_status not in {'ok', 'down'}:
+        return
+    if not old_status:
+        return
+    if new_status == 'down':
+        text = (
+            f"🚨 سرور از دسترس خارج شد\n"
+            f"نام: {server['name']}\n"
+            f"وضعیت قبلی: {old_status} → {new_status}\n"
+            f"پیام: {message or '-'}"
+        )
+    else:
+        text = (
+            f"✅ سرور دوباره آنلاین شد\n"
+            f"نام: {server['name']}\n"
+            f"وضعیت قبلی: {old_status} → {new_status}"
+        )
+    try:
+        NOTIFIER.message(text)
+    except Exception as exc:
+        LOGGER.warning('server_status_notify_failed server=%s error=%s', server.get('name'), exc)
+
+
+def _resolve_target_ip_for_dns(host: str) -> str:
+    try:
+        socket.inet_aton(host)
+        return host
+    except OSError:
+        try:
+            return socket.gethostbyname(host)
+        except OSError as exc:
+            raise RuntimeError(f'failed to resolve host for DNS: {host}') from exc
+
+
+def _is_local_server(server: dict) -> bool:
+    api_url = str(server.get('api_url') or '')
+    if server.get('name') == CONFIG.get('local_server_name'):
+        return True
+    return api_url.startswith('http://127.0.0.1:') or api_url.startswith('http://localhost:')
+
+
+def _cloudflare_service_url_for_server(server: dict) -> str:
+    xray_port = int(server.get('xray_port') or 0)
+    if xray_port <= 0:
+        raise RuntimeError(f"server {server.get('name')} does not have a valid xray port")
+    return f'http://127.0.0.1:{xray_port}'
+
+
+def sync_cloudflare_if_needed() -> tuple[int, list[str]]:
+    if not getattr(CLOUDFLARE, 'enabled', False) or not CLOUDFLARE_AUTO_SYNC:
+        return 0, []
+    last = DB.get_meta('last_cloudflare_sync_at')
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if datetime.utcnow() - last_dt < timedelta(minutes=CLOUDFLARE_AUTO_SYNC_MINUTES):
+                return 0, []
+        except ValueError:
+            pass
+    synced: list[str] = []
+    for server in DB.list_servers(enabled_only=True):
+        try:
+            if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
+                info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
+                tunnel_status = 'configured'
+                if _is_local_server(server):
+                    try:
+                        deploy_local_service(info['tunnel_token'])
+                    except CloudflaredRuntimeError as exc:
+                        tunnel_status = 'pending_runtime'
+                        LOGGER.warning('cloudflared_runtime_pending server=%s error=%s', server.get('name'), exc)
+                DB.update_server_tunnel(server['name'], info['tunnel_id'], info['tunnel_name'], tunnel_status, now_iso())
+                DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+                synced.append(info['dns_name'])
+                continue
+            target = str(server.get('public_host') or '').strip()
+            if not target:
+                continue
+            info = CLOUDFLARE.ensure_server_dns(server['name'], _resolve_target_ip_for_dns(target))
+            DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+            synced.append(info['dns_name'])
+        except (CloudflaredRuntimeError, Exception) as exc:
+            record_error(DB, LOGGER, component='cloudflare', target_type='server', target_key=server.get('name', ''), message='automatic cloudflare sync failed', exc=exc)
+    DB.set_meta('last_cloudflare_sync_at', now_iso())
+    return len(synced), synced
+
+
 def refresh_health_cache() -> int:
     count = 0
     for server in DB.list_servers():
+        previous_status = str(server.get('last_health_status') or '')
         try:
             health = server_client(server).health()['data']
-            DB.add_or_update_server(
+            merged = dict(server)
+            merged.update(
                 {
-                    'name': server['name'],
-                    'api_url': server['api_url'],
-                    'api_token': server['api_token'],
                     'public_host': health.get('public_host') or server.get('public_host') or '',
                     'host_mode': health.get('host_mode') or server.get('host_mode') or '',
                     'xray_port': int(health.get('xray_port') or server.get('xray_port') or 0),
                     'transport_mode': health.get('transport_mode') or server.get('transport_mode') or 'ws',
-                    'reality_server_name': health.get('reality_server_name') or '',
-                    'reality_public_key': health.get('reality_public_key') or '',
-                    'reality_short_id': health.get('reality_short_id') or '',
+                    'ws_path': health.get('ws_path') or server.get('ws_path') or '/ws',
+                    'reality_server_name': health.get('reality_server_name') or server.get('reality_server_name') or '',
+                    'reality_public_key': health.get('reality_public_key') or server.get('reality_public_key') or '',
+                    'reality_short_id': health.get('reality_short_id') or server.get('reality_short_id') or '',
                     'fingerprint': health.get('fingerprint') or server.get('fingerprint') or 'chrome',
+                    'reality_port': int(health.get('reality_port') or server.get('reality_port') or 0),
                     'enabled': bool(server.get('enabled', 1)),
                     'last_health_status': 'ok',
                     'last_health_message': '',
                     'last_health_at': now_iso(),
-                    'cpu_percent': health.get('cpu_percent', 0),
-                    'memory_percent': health.get('memory_percent', 0),
-                    'disk_percent': health.get('disk_percent', 0),
-                    'load_1m': health.get('load_1m', 0),
-                    'user_count': health.get('user_count', 0),
-                    'xray_active': bool(health.get('xray_active', False)),
-                    'last_sync_at': server.get('last_sync_at', ''),
-                    'created_at': server['created_at'],
+                    'cpu_percent': health.get('cpu_percent', server.get('cpu_percent', 0)),
+                    'memory_percent': health.get('memory_percent', server.get('memory_percent', 0)),
+                    'disk_percent': health.get('disk_percent', server.get('disk_percent', 0)),
+                    'load_1m': health.get('load_1m', server.get('load_1m', 0)),
+                    'user_count': health.get('user_count', server.get('user_count', 0)),
+                    'xray_active': bool(health.get('xray_active', server.get('xray_active', False))),
                     'updated_at': now_iso(),
                 }
             )
+            DB.add_or_update_server(merged)
+            _notify_server_status_change(server, previous_status, 'ok', '')
             count += 1
         except Exception as exc:
             DB.update_server_health(server['name'], 'down', str(exc), now_iso())
+            _notify_server_status_change(server, previous_status, 'down', str(exc))
             record_error(DB, LOGGER, component='scheduler', target_type='server', target_key=server['name'], message='refresh health failed', exc=exc)
     return count
 
@@ -282,9 +383,10 @@ def main() -> None:
             sent_report = send_daily_report_if_needed()
             sent_weekly = send_weekly_report_if_needed()
             created_backup = periodic_backup_if_needed()
+            cf_synced_count, _cf_names = sync_cloudflare_if_needed()
             LOGGER.info(
-                'scheduler_cycle healthy=%s synced=%s expired=%s quota=%s warn_expiry=%s warn_quota=%s report=%s weekly=%s backup=%s',
-                healthy, synced, disabled_expired, disabled_quota, warned_expiry, warned_quota, sent_report, sent_weekly, created_backup,
+                'scheduler_cycle healthy=%s synced=%s expired=%s quota=%s warn_expiry=%s warn_quota=%s report=%s weekly=%s backup=%s cloudflare_synced=%s',
+                healthy, synced, disabled_expired, disabled_quota, warned_expiry, warned_quota, sent_report, sent_weekly, created_backup, cf_synced_count,
             )
         except Exception:
             LOGGER.exception('scheduler_cycle_failed')

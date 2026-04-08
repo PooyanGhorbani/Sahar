@@ -18,17 +18,21 @@ APP = Flask(__name__)
 
 def _profiles_for_server(server: dict) -> list[dict]:
     profiles = []
-    if server.get('public_host') and int(server.get('xray_port') or 0) > 0:
-        profiles.append({
+    simple_host = str(server.get('cf_dns_name') or server.get('public_host') or '').strip()
+    if simple_host and int(server.get('xray_port') or 0) > 0:
+        simple_profile = {
             'profile_key': 'simple',
-            'display_name': f"{server['name']} | VLESS | Simple",
-            'public_host': server.get('public_host') or '',
-            'port': int(server.get('xray_port') or 0),
+            'display_name': f"{server['name']} | VLESS | WS",
+            'public_host': simple_host,
+            'port': 443 if server.get('cf_dns_name') else int(server.get('xray_port') or 0),
             'fingerprint': server.get('fingerprint') or 'chrome',
-            'transport_mode': server.get('transport_mode') or 'ws',
+            'transport_mode': 'ws',
             'ws_path': server.get('ws_path') or '/ws',
-        })
-    if server.get('public_host') and int(server.get('reality_port') or 0) > 0 and server.get('reality_public_key') and server.get('reality_server_name'):
+        }
+        if server.get('cf_dns_name'):
+            simple_profile.update({'tls_enabled': True, 'host_header': simple_host, 'server_name': simple_host})
+        profiles.append(simple_profile)
+    if (not server.get('cf_tunnel_id')) and server.get('public_host') and int(server.get('reality_port') or 0) > 0 and server.get('reality_public_key') and server.get('reality_server_name'):
         profiles.append({
             'profile_key': 'reality',
             'display_name': f"{server['name']} | VLESS | Reality",

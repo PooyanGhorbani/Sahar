@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import quote
@@ -156,9 +156,25 @@ def normalized_ws_path(value: str) -> str:
 
 
 def pick_primary_profile(user: Dict) -> Dict:
-    transport_mode = str(user.get('transport_mode') or '').lower()
-    profile_key = 'reality' if transport_mode == 'reality' else 'simple'
+    transport_mode = str(user.get('transport_mode') or '').lower() or 'ws'
+    cf_dns_name = str(user.get('cf_dns_name') or '').strip()
+    if cf_dns_name:
+        return {
+            'public_host': cf_dns_name,
+            'port': 443,
+            'profile_key': 'simple',
+            'transport_mode': 'ws',
+            'ws_path': normalized_ws_path(user.get('ws_path') or DEFAULT_WS_PATH),
+            'tls_enabled': True,
+            'host_header': cf_dns_name,
+            'server_name': cf_dns_name,
+            'fingerprint': user.get('fingerprint') or 'chrome',
+            'reality_server_name': user.get('reality_server_name') or '',
+            'reality_public_key': user.get('reality_public_key') or '',
+            'reality_short_id': user.get('reality_short_id') or '',
+        }
 
+    profile_key = 'reality' if transport_mode == 'reality' else 'simple'
     if profile_key == 'reality':
         port = int(user.get('reality_port') or user.get('xray_port') or user.get('simple_port') or 0)
     else:
@@ -168,8 +184,11 @@ def pick_primary_profile(user: Dict) -> Dict:
         'public_host': user['public_host'],
         'port': port,
         'profile_key': profile_key,
-        'transport_mode': transport_mode or 'ws',
+        'transport_mode': transport_mode,
         'ws_path': normalized_ws_path(user.get('ws_path') or DEFAULT_WS_PATH),
+        'tls_enabled': False,
+        'host_header': user.get('public_host') or '',
+        'server_name': user.get('public_host') or '',
         'reality_server_name': user.get('reality_server_name') or '',
         'reality_public_key': user.get('reality_public_key') or '',
         'reality_short_id': user.get('reality_short_id') or '',
@@ -200,10 +219,14 @@ def build_vless_link_for_profile(uuid_value: str, username: str, profile: Dict) 
 
     ws_path = quote(normalized_ws_path(profile.get('ws_path') or DEFAULT_WS_PATH), safe='/')
     host_header = quote(str(profile.get('host_header') or host))
-    return (
-        f"vless://{uuid_value}@{host}:{port}"
-        f"?encryption=none&security=none&type=ws&host={host_header}&path={ws_path}#{username_q}"
-    )
+    tls_enabled = bool(profile.get('tls_enabled'))
+    security = 'tls' if tls_enabled else 'none'
+    params = ['encryption=none', f'security={security}', 'type=ws', f'host={host_header}', f'path={ws_path}']
+    if tls_enabled:
+        sni = quote(str(profile.get('server_name') or host))
+        params.append(f'sni={sni}')
+        params.append(f'fp={fingerprint}')
+    return f"vless://{uuid_value}@{host}:{port}?{'&'.join(params)}#{username_q}"
 
 
 def build_vless_link(user: Dict) -> str:

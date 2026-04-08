@@ -1,6 +1,11 @@
-0.1.41
-- make subscription the primary user delivery flow in Telegram while keeping direct VLESS links available
-- switch the simple VLESS profile default from tcp to ws and add ws path support across master, agent, and subscription output
-- add Cloudflare management inside Telegram with a dedicated menu, runtime setting persistence, and DNS sync for registered servers
-- add missing master save_config/restart helpers so settings edited from Telegram persist correctly
-- add ws_path to server metadata and database schema with backward-compatible migration
+Sahar 0.1.46
+
+- Added automatic server down/recovery alerts to the scheduler for admin Telegram notifications.
+- Added automatic periodic Cloudflare DNS/Tunnel sync with configurable interval.
+- Added raw subscription URL and one-tap subscription token rotation in the Telegram panel.
+- Added a Doctor command/page for quick operational diagnostics.
+- Expanded server detail actions with profiles, DNS refresh, Xray status, and logs.
+- Surfaced richer Cloudflare metadata on the server detail page.
+- Added new master config defaults for Cloudflare auto sync and server status alerts.
+
+- Legacy database migration hardening for old plans/admin/admin-access/subscription tables.

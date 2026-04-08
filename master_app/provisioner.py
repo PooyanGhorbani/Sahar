@@ -39,6 +39,7 @@ class SSHProvisioner:
         agent_listen_port: int = 8787,
         xray_port: int = 443,
         xray_api_port: int = 10085,
+        cloudflared_tunnel_token: str = '',
     ) -> Tuple[str, str, Dict[str, Any]]:
         host_mode = self._infer_host_mode(host)
         agent_token = secrets.token_urlsafe(32)
@@ -87,6 +88,14 @@ class SSHProvisioner:
             env_prefix = ' '.join(f"{k}={shlex.quote(v)}" for k, v in env.items())
             install_cmd = f"cd {shlex.quote(remote_dir)} && {env_prefix} bash ./install_agent.sh"
             self._run(ssh, install_cmd, ssh_password, use_sudo=ssh_username != 'root', timeout=1800)
+            if cloudflared_tunnel_token:
+                self._deploy_cloudflared_tunnel(
+                    ssh,
+                    cloudflared_tunnel_token,
+                    ssh_password,
+                    use_sudo=ssh_username != 'root',
+                    timeout=1800,
+                )
 
             # best-effort cleanup
             try:
@@ -159,6 +168,62 @@ class SSHProvisioner:
             if 'sudo' in message and ('not found' in message or 'command not found' in message):
                 raise ProvisionError('remote user is not root and sudo is not installed on the target server') from exc
             raise ProvisionError('remote user needs working sudo privileges or you must connect as root') from exc
+
+
+    def _deploy_cloudflared_tunnel(self, ssh: paramiko.SSHClient, tunnel_token: str, password: str, *, use_sudo: bool, timeout: int) -> None:
+        script = f'''set -e
+arch=$(uname -m)
+case "$arch" in
+  x86_64|amd64|x64) suffix="amd64" ;;
+  i386|i686) suffix="386" ;;
+  aarch64|arm64|armv8) suffix="arm64" ;;
+  armv7l|armv6l|arm) suffix="arm" ;;
+  *) echo "unsupported arch for cloudflared: $arch" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$suffix" -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+if command -v systemctl >/dev/null 2>&1; then
+cat >/etc/systemd/system/sahar-cloudflared.service <<'SERVICE'
+[Unit]
+Description=Sahar Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token {tunnel_token}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+systemctl enable sahar-cloudflared >/dev/null 2>&1 || true
+systemctl restart sahar-cloudflared
+elif command -v rc-service >/dev/null 2>&1; then
+cat >/etc/init.d/sahar-cloudflared <<'SERVICE'
+#!/sbin/openrc-run
+name="sahar-cloudflared"
+command="/usr/local/bin/cloudflared"
+command_args="tunnel --no-autoupdate run --token {tunnel_token}"
+command_background=true
+pidfile="/run/sahar-cloudflared.pid"
+output_log="/var/log/sahar-cloudflared.log"
+error_log="/var/log/sahar-cloudflared.err"
+
+depend() {{
+    need net
+}}
+SERVICE
+chmod +x /etc/init.d/sahar-cloudflared
+rc-update add sahar-cloudflared default >/dev/null 2>&1 || true
+rc-service sahar-cloudflared restart >/dev/null 2>&1 || rc-service sahar-cloudflared start
+else
+/usr/local/bin/cloudflared tunnel --no-autoupdate run --token {tunnel_token} >/tmp/sahar-cloudflared.log 2>&1 &
+fi
+'''
+        self._run(ssh, script, password, use_sudo=use_sudo, timeout=timeout)
 
     def _wait_for_health(self, client: AgentClient) -> Dict[str, Any]:
         deadline = time.time() + 180

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_client import AgentClient, AgentError
 from cloudflare_manager import CloudflareManager
+from cloudflared_runtime import deploy_local_service
 from db import Database
 from error_tools import record_error
 from utils import load_config, now_iso, setup_logging
@@ -133,10 +134,22 @@ def register() -> None:
         'provisioning_message': provisioning_message,
         'updated_at': now_iso(),
     })
-    if CF.enabled and meta.get('host_mode') == 'ip' and meta.get('public_host'):
+    if CF.enabled:
         try:
-            info = CF.ensure_server_dns(name, meta.get('public_host'))
-            DB.update_server_dns(name, info['zone_id'], info['record_id'], info['dns_name'], now_iso())
+            if getattr(CF, 'tunnel_enabled', False):
+                service_url = f"http://127.0.0.1:{int(meta.get('simple_port') or meta.get('xray_port') or 443)}"
+                info = CF.ensure_remote_tunnel(name, service_url, existing=DB.get_server(name) or {})
+                tunnel_status = 'configured'
+                try:
+                    deploy_local_service(info['tunnel_token'])
+                except Exception as exc:
+                    tunnel_status = 'pending_runtime'
+                    LOGGER.warning('local_cloudflared_runtime_pending server=%s exc=%s', name, exc)
+                DB.update_server_tunnel(name, info['tunnel_id'], info['tunnel_name'], tunnel_status, now_iso())
+                DB.update_server_dns(name, info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+            elif meta.get('host_mode') == 'ip' and meta.get('public_host'):
+                info = CF.ensure_server_dns(name, meta.get('public_host'))
+                DB.update_server_dns(name, info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
         except Exception as exc:
             record_error(DB, LOGGER, component='cloudflare', target_type='server', target_key=name, message='local cloudflare dns sync failed', exc=exc)
 

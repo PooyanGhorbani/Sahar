@@ -55,7 +55,11 @@ class Database:
                     last_sync_at TEXT DEFAULT '',
                     cf_zone_id TEXT DEFAULT '',
                     cf_record_id TEXT DEFAULT '',
+                    cf_record_type TEXT DEFAULT '',
                     cf_dns_name TEXT DEFAULT '',
+                    cf_tunnel_id TEXT DEFAULT '',
+                    cf_tunnel_name TEXT DEFAULT '',
+                    cf_tunnel_status TEXT DEFAULT '',
                     provisioning_state TEXT DEFAULT 'new',
                     provisioning_message TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -219,11 +223,20 @@ class Database:
             self._ensure_column(conn, 'servers', 'last_sync_at', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'cf_zone_id', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'cf_record_id', "TEXT DEFAULT ''")
+            self._ensure_column(conn, 'servers', 'cf_record_type', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'cf_dns_name', "TEXT DEFAULT ''")
+            self._ensure_column(conn, 'servers', 'cf_tunnel_id', "TEXT DEFAULT ''")
+            self._ensure_column(conn, 'servers', 'cf_tunnel_name', "TEXT DEFAULT ''")
+            self._ensure_column(conn, 'servers', 'cf_tunnel_status', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'provisioning_state', "TEXT DEFAULT 'new'")
             self._ensure_column(conn, 'servers', 'provisioning_message', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'audits', 'actor_chat_id', "TEXT NOT NULL DEFAULT 'system'")
             self._ensure_column(conn, 'audits', 'actor_role', "TEXT NOT NULL DEFAULT 'system'")
+            self._ensure_server_schema(conn)
+            self._ensure_plans_schema(conn)
+            self._ensure_admins_schema(conn)
+            self._ensure_user_server_access_schema(conn)
+            self._ensure_subscription_tokens_schema(conn)
             self._seed_default_plans(conn)
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -236,8 +249,43 @@ class Database:
         if 'ws_path' not in columns:
             conn.execute("ALTER TABLE servers ADD COLUMN ws_path TEXT DEFAULT '/ws'")
         if 'transport_mode' in columns:
-            conn.execute("UPDATE servers SET transport_mode = 'ws' WHERE transport_mode IS NULL OR transport_mode = ''")
+            conn.execute("UPDATE servers SET transport_mode = 'ws' WHERE transport_mode IS NULL OR transport_mode = '' OR lower(transport_mode) = 'tcp'")
         conn.execute("UPDATE servers SET ws_path = '/ws' WHERE ws_path IS NULL OR ws_path = ''")
+
+    def _ensure_plans_schema(self, conn) -> None:
+        self._ensure_column(conn, 'plans', 'label', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'plans', 'traffic_gb', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column(conn, 'plans', 'days', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column(conn, 'plans', 'notes', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'plans', 'enabled', 'INTEGER NOT NULL DEFAULT 1')
+        self._ensure_column(conn, 'plans', 'sort_order', 'INTEGER NOT NULL DEFAULT 0')
+        self._ensure_column(conn, 'plans', 'created_at', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'plans', 'updated_at', "TEXT NOT NULL DEFAULT ''")
+        columns = {row['name'] for row in conn.execute("PRAGMA table_info(plans)").fetchall()}
+        if 'title' in columns and 'label' in columns:
+            conn.execute("UPDATE plans SET label = COALESCE(NULLIF(label, ''), title, '')")
+        if 'duration_days' in columns and 'days' in columns:
+            conn.execute("UPDATE plans SET days = COALESCE(NULLIF(days, 0), duration_days, 0)")
+        if 'price' in columns and 'notes' in columns:
+            conn.execute("UPDATE plans SET notes = CASE WHEN notes = '' THEN 'legacy-price:' || price ELSE notes END")
+
+    def _ensure_admins_schema(self, conn) -> None:
+        self._ensure_column(conn, 'admins', 'display_name', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'admins', 'enabled', 'INTEGER NOT NULL DEFAULT 1')
+        self._ensure_column(conn, 'admins', 'created_at', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'admins', 'updated_at', "TEXT NOT NULL DEFAULT ''")
+        columns = {row['name'] for row in conn.execute("PRAGMA table_info(admins)").fetchall()}
+        if 'title' in columns and 'display_name' in columns:
+            conn.execute("UPDATE admins SET display_name = COALESCE(NULLIF(display_name, ''), title, '')")
+
+    def _ensure_user_server_access_schema(self, conn) -> None:
+        self._ensure_column(conn, 'user_server_access', 'created_at', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'user_server_access', 'updated_at', "TEXT NOT NULL DEFAULT ''")
+
+    def _ensure_subscription_tokens_schema(self, conn) -> None:
+        self._ensure_column(conn, 'subscription_tokens', 'enabled', 'INTEGER NOT NULL DEFAULT 1')
+        self._ensure_column(conn, 'subscription_tokens', 'created_at', "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, 'subscription_tokens', 'updated_at', "TEXT NOT NULL DEFAULT ''")
 
 
     def _seed_default_plans(self, conn: sqlite3.Connection) -> None:
@@ -371,6 +419,10 @@ class Database:
             row = conn.execute('SELECT value FROM meta WHERE key = ?', (key,)).fetchone()
             return row['value'] if row else ''
 
+    def delete_meta(self, key: str) -> None:
+        with self.connect() as conn:
+            conn.execute('DELETE FROM meta WHERE key = ?', (key,))
+
     # plans
     def list_plans(self, enabled_only: bool = True) -> List[Dict[str, Any]]:
         with self.connect() as conn:
@@ -419,8 +471,9 @@ class Database:
                     reality_short_id, fingerprint, reality_port, enabled, last_health_status,
                     last_health_message, last_health_at, cpu_percent, memory_percent,
                     disk_percent, load_1m, user_count, xray_active, last_sync_at,
-                    cf_zone_id, cf_record_id, cf_dns_name, provisioning_state, provisioning_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cf_zone_id, cf_record_id, cf_record_type, cf_dns_name, cf_tunnel_id, cf_tunnel_name, cf_tunnel_status,
+                    provisioning_state, provisioning_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     api_url=excluded.api_url,
                     api_token=excluded.api_token,
@@ -447,7 +500,11 @@ class Database:
                     last_sync_at=excluded.last_sync_at,
                     cf_zone_id=excluded.cf_zone_id,
                     cf_record_id=excluded.cf_record_id,
+                    cf_record_type=excluded.cf_record_type,
                     cf_dns_name=excluded.cf_dns_name,
+                    cf_tunnel_id=excluded.cf_tunnel_id,
+                    cf_tunnel_name=excluded.cf_tunnel_name,
+                    cf_tunnel_status=excluded.cf_tunnel_status,
                     provisioning_state=excluded.provisioning_state,
                     provisioning_message=excluded.provisioning_message,
                     updated_at=excluded.updated_at
@@ -479,7 +536,11 @@ class Database:
                     server.get('last_sync_at', ''),
                     server.get('cf_zone_id', ''),
                     server.get('cf_record_id', ''),
+                    server.get('cf_record_type', ''),
                     server.get('cf_dns_name', ''),
+                    server.get('cf_tunnel_id', ''),
+                    server.get('cf_tunnel_name', ''),
+                    server.get('cf_tunnel_status', ''),
                     server.get('provisioning_state', 'healthy'),
                     server.get('provisioning_message', ''),
                     server.get('created_at', ''),
@@ -534,9 +595,13 @@ class Database:
         with self.connect() as conn:
             conn.execute('UPDATE servers SET last_sync_at = ?, updated_at = ? WHERE name = ?', (synced_at, synced_at, name))
 
-    def update_server_dns(self, name: str, zone_id: str, record_id: str, dns_name: str, updated_at: str) -> None:
+    def update_server_dns(self, name: str, zone_id: str, record_id: str, dns_name: str, updated_at: str, record_type: str = '') -> None:
         with self.connect() as conn:
-            conn.execute('UPDATE servers SET cf_zone_id = ?, cf_record_id = ?, cf_dns_name = ?, public_host = ?, host_mode = ?, updated_at = ? WHERE name = ?', (zone_id, record_id, dns_name, dns_name, 'domain', updated_at, name))
+            conn.execute('UPDATE servers SET cf_zone_id = ?, cf_record_id = ?, cf_record_type = ?, cf_dns_name = ?, updated_at = ? WHERE name = ?', (zone_id, record_id, record_type, dns_name, updated_at, name))
+
+    def update_server_tunnel(self, name: str, tunnel_id: str, tunnel_name: str, tunnel_status: str, updated_at: str) -> None:
+        with self.connect() as conn:
+            conn.execute('UPDATE servers SET cf_tunnel_id = ?, cf_tunnel_name = ?, cf_tunnel_status = ?, updated_at = ? WHERE name = ?', (tunnel_id, tunnel_name, tunnel_status, updated_at, name))
 
     def get_server(self, name: str) -> Optional[Dict[str, Any]]:
         with self.connect() as conn:
@@ -625,7 +690,7 @@ class Database:
                 '''
                 SELECT u.*, s.name AS server_name, s.public_host, s.host_mode, s.xray_port,
                        s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
-                       s.reality_short_id, s.fingerprint, s.reality_port
+                       s.reality_short_id, s.fingerprint, s.reality_port, s.cf_dns_name, s.cf_tunnel_id, s.cf_tunnel_name, s.cf_tunnel_status
                 FROM users u
                 JOIN servers s ON s.id = u.server_id
                 WHERE u.username = ?
@@ -745,7 +810,7 @@ class Database:
                 '''
                 SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.public_host, s.host_mode,
                        s.xray_port, s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
-                       s.reality_short_id, s.fingerprint, s.reality_port
+                       s.reality_short_id, s.fingerprint, s.reality_port, s.cf_dns_name, s.cf_tunnel_id, s.cf_tunnel_name, s.cf_tunnel_status
                 FROM users u
                 JOIN servers s ON s.id = u.server_id
                 WHERE u.is_active = 1 AND u.traffic_gb > 0
@@ -844,6 +909,25 @@ class Database:
             )
             return token_value
 
+    def rotate_subscription_token(self, username: str, token_value: str, updated_at: str) -> str:
+        with self.connect() as conn:
+            user = conn.execute('SELECT id FROM users WHERE username = ?', (username,)).fetchone()
+            if not user:
+                raise ValueError('user not found')
+            user_id = int(user['id'])
+            conn.execute(
+                '''
+                INSERT INTO subscription_tokens (user_id, token, enabled, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    token=excluded.token,
+                    enabled=1,
+                    updated_at=excluded.updated_at
+                ''',
+                (user_id, token_value, updated_at, updated_at),
+            )
+            return token_value
+
     def get_subscription_token(self, username: str) -> str:
         with self.connect() as conn:
             row = conn.execute(
@@ -858,7 +942,7 @@ class Database:
                 """
                 SELECT u.*, s.name AS server_name, s.public_host, s.host_mode, s.xray_port,
                        s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
-                       s.reality_short_id, s.fingerprint, s.reality_port
+                       s.reality_short_id, s.fingerprint, s.reality_port, s.cf_dns_name, s.cf_tunnel_id, s.cf_tunnel_name, s.cf_tunnel_status
                 FROM subscription_tokens st
                 JOIN users u ON u.id = st.user_id
                 JOIN servers s ON s.id = u.server_id
