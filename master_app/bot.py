@@ -109,8 +109,24 @@ def is_admin(update: Update) -> bool:
     return bool(update.effective_chat) and has_role(str(update.effective_chat.id), 'viewer')
 
 
+def maybe_bootstrap_first_owner(update: Update) -> bool:
+    chat = update.effective_chat
+    if not chat or str(getattr(chat, 'type', '')) != 'private':
+        return False
+    if DB.list_admins():
+        return False
+    now = now_iso()
+    user = update.effective_user
+    title = getattr(user, 'full_name', None) or getattr(chat, 'title', None) or 'Owner'
+    DB.upsert_admin(str(chat.id), 'owner', title, now, now, True)
+    return True
+
+
 async def deny_if_not_admin(update: Update, minimum_role: str = 'support') -> bool:
+    bootstrapped = maybe_bootstrap_first_owner(update)
     if update.effective_chat and has_role(str(update.effective_chat.id), minimum_role):
+        if bootstrapped and update.effective_message:
+            await update.effective_message.reply_text('✅ این چت به‌عنوان اولین مالک ثبت شد.')
         return False
     target = update.effective_message
     if target:

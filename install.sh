@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-MODE="${1:-}"
+MODE="${1:-${SAHAR_INSTALL_MODE:-master}}"
 OS_ID=""
 OS_VERSION_ID=""
 OS_PRETTY_NAME=""
@@ -32,7 +32,6 @@ detect_os() {
     exit 1
   fi
 
-  # shellcheck disable=SC1091
   . /etc/os-release
 
   OS_ID="${ID:-unknown}"
@@ -73,29 +72,10 @@ ensure_bootstrap_packages() {
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y bash curl unzip ca-certificates
+    apt-get install -y bash curl unzip ca-certificates git
   else
-    apk add --no-cache bash curl unzip ca-certificates
+    apk add --no-cache bash curl unzip ca-certificates git
   fi
-}
-
-prompt_mode() {
-  if [ -n "$MODE" ]; then
-    return
-  fi
-  echo "Install mode:"
-  echo "1) Master"
-  echo "2) Agent"
-  printf "Select [1/2]: "
-  read ans
-  case "$ans" in
-    1) MODE="master" ;;
-    2) MODE="agent" ;;
-    *)
-      echo "Invalid install mode"
-      exit 1
-      ;;
-  esac
 }
 
 run_mode() {
@@ -115,10 +95,10 @@ run_mode() {
 
 print_banner
 require_root
-prompt_mode
 detect_os
 echo "Detected OS: $OS_PRETTY_NAME"
 echo "Detected OS family: $OS_FAMILY"
 echo "Detected init system: $INIT_SYSTEM"
+echo "Install mode: $MODE"
 ensure_bootstrap_packages
 run_mode

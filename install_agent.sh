@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.22"
+APP_VERSION="0.1.23"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -119,9 +119,9 @@ resolve_host_ready() {
 install_packages() {
   if [[ "$OS_FAMILY" == "debian" ]]; then
     apt update
-    apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate
+    apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate git
   else
-    apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers
+    apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers git
   fi
 }
 
@@ -135,24 +135,70 @@ infer_host_mode() {
   fi
 }
 
+detect_public_ipv4() {
+  local ip=""
+  for url in \
+    "https://api.ipify.org" \
+    "https://ipv4.icanhazip.com" \
+    "https://ifconfig.me/ip"; do
+    ip="$(curl -4fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$ip"
+      return 0
+    fi
+  done
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+default_public_host() {
+  local detected
+  detected="${PUBLIC_HOST:-}"
+  if [[ -n "$detected" ]]; then
+    echo "$detected"
+    return 0
+  fi
+  detected="$(detect_public_ipv4 || true)"
+  if [[ -n "$detected" ]]; then
+    echo "$detected"
+    return 0
+  fi
+  detected="$(hostname -f 2>/dev/null || true)"
+  if [[ -n "$detected" ]]; then
+    echo "$detected"
+    return 0
+  fi
+  hostname 2>/dev/null || true
+}
+
 load_noninteractive_env() {
+  PUBLIC_HOST="${PUBLIC_HOST:-$(default_public_host)}"
   HOST_MODE="${HOST_MODE:-$(infer_host_mode "${PUBLIC_HOST:-}")}"
   TRANSPORT_MODE="dual"
   FINGERPRINT="${FINGERPRINT:-chrome}"
   REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.cloudflare.com}"
   REALITY_DEST="${REALITY_DEST:-${REALITY_SERVER_NAME}:443}"
-  AGENT_NAME="${AGENT_NAME:-agent-node}"
+  AGENT_NAME="${AGENT_NAME:-$(hostname 2>/dev/null || echo agent-node)}"
   XRAY_PORT="${XRAY_PORT:-443}"
   REALITY_PORT="${REALITY_PORT:-8443}"
   XRAY_API_PORT="${XRAY_API_PORT:-10085}"
   AGENT_LISTEN_HOST="${AGENT_LISTEN_HOST:-0.0.0.0}"
   AGENT_LISTEN_PORT="${AGENT_LISTEN_PORT:-8787}"
-  ALLOWED_SOURCES="$(normalize_allowed_sources "${ALLOWED_SOURCES:-}")"
-  AGENT_TOKEN="${AGENT_TOKEN:-}"
-  if [[ -z "${PUBLIC_HOST:-}" ]]; then
-    echo "PUBLIC_HOST is required in NONINTERACTIVE mode"
-    exit 1
+  ALLOWED_SOURCES_RAW="${ALLOWED_SOURCES:-}"
+  if [[ -z "$ALLOWED_SOURCES_RAW" ]]; then
+    ALLOWED_SOURCES_RAW="$(detect_ssh_client_ip || true)"
+    if [[ -n "$ALLOWED_SOURCES_RAW" && "$ALLOWED_SOURCES_RAW" != */* ]]; then
+      ALLOWED_SOURCES_RAW="$ALLOWED_SOURCES_RAW/32"
+    fi
   fi
+  ALLOWED_SOURCES="$(normalize_allowed_sources "$ALLOWED_SOURCES_RAW")"
+  AGENT_TOKEN="${AGENT_TOKEN:-}"
   if [[ -z "$AGENT_TOKEN" ]]; then
     AGENT_TOKEN="$(python3 - <<'PYTOK'
 import secrets
@@ -255,7 +301,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.22"
+  ua="SaharInstaller/0.1.23"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -465,13 +511,7 @@ main() {
   require_root
   check_os
   install_packages
-  if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
-    load_noninteractive_env
-  else
-    ask_host_mode
-    ask_transport_mode
-    ask_config
-  fi
+  load_noninteractive_env
   install_xray
   prepare_dirs
   copy_code

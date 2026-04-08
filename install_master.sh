@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.22"
+APP_VERSION="0.1.23"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -104,9 +104,9 @@ resolve_host_ready() {
 install_packages() {
   if [[ "$OS_FAMILY" == "debian" ]]; then
     apt update
-    apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate
+    apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git
   else
-    apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers
+    apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git
   fi
 }
 
@@ -120,116 +120,105 @@ ensure_user() {
   fi
 }
 
-ask_config() {
-  read -rp "Telegram bot token: " BOT_TOKEN
-  read -rp "Admin chat IDs (comma-separated): " ADMIN_CHAT_IDS
-  read -rp "Scheduler interval seconds [300]: " SCHEDULER_INTERVAL
-  SCHEDULER_INTERVAL="${SCHEDULER_INTERVAL:-300}"
-  read -rp "Agent timeout seconds [15]: " AGENT_TIMEOUT
-  AGENT_TIMEOUT="${AGENT_TIMEOUT:-15}"
-  read -rp "Warn when days left <= [3]: " WARN_DAYS_LEFT
-  WARN_DAYS_LEFT="${WARN_DAYS_LEFT:-3}"
-  read -rp "Warn when usage percent >= [80]: " WARN_USAGE_PERCENT
-  WARN_USAGE_PERCENT="${WARN_USAGE_PERCENT:-80}"
-  read -rp "Backup every N hours [24]: " BACKUP_INTERVAL_HOURS
-  BACKUP_INTERVAL_HOURS="${BACKUP_INTERVAL_HOURS:-24}"
-  read -rp "Keep latest N backups [10]: " BACKUP_RETENTION
-  BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
-  read -rp "Subscription public base URL (example: https://sub.example.com or http://IP:8090): " SUBSCRIPTION_BASE_URL
-  read -rp "Subscription bind host [0.0.0.0]: " SUBSCRIPTION_BIND_HOST
-  SUBSCRIPTION_BIND_HOST="${SUBSCRIPTION_BIND_HOST:-0.0.0.0}"
-  read -rp "Subscription bind port [8090]: " SUBSCRIPTION_BIND_PORT
-  SUBSCRIPTION_BIND_PORT="${SUBSCRIPTION_BIND_PORT:-8090}"
-  read -rp "Enable Cloudflare DNS automation? [Y/n]: " CLOUDFLARE_ENABLED_CHOICE
-  CLOUDFLARE_ENABLED_CHOICE="${CLOUDFLARE_ENABLED_CHOICE:-Y}"
-  if [[ "$CLOUDFLARE_ENABLED_CHOICE" =~ ^([Yy]|yes|YES)$ ]]; then
-    CLOUDFLARE_ENABLED=true
-    read -rp "Cloudflare domain name (example.com): " CLOUDFLARE_DOMAIN_NAME
-    read -rp "Base subdomain (optional, example: vpn): " CLOUDFLARE_BASE_SUBDOMAIN
-    read -rp "Cloudflare API token (Zone:Read + DNS:Write): " CLOUDFLARE_API_TOKEN
+parse_bool() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|y|Y|on|ON|On) echo "true" ;;
+    *) echo "false" ;;
+  esac
+}
+
+infer_host_mode() {
+  local host="${1:-}"
+  if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ip"
   else
-    CLOUDFLARE_ENABLED=false
+    echo "domain"
+  fi
+}
+
+detect_public_ipv4() {
+  local ip=""
+  for url in \
+    "https://api.ipify.org" \
+    "https://ipv4.icanhazip.com" \
+    "https://ifconfig.me/ip"; do
+    ip="$(curl -4fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$ip"
+      return 0
+    fi
+  done
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$ip"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+first_nonempty() {
+  local value
+  for value in "$@"; do
+    if [[ -n "$value" ]]; then
+      echo "$value"
+      return 0
+    fi
+  done
+  return 1
+}
+
+init_config_defaults() {
+  local detected_public_ip
+  BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+  ADMIN_CHAT_IDS="${ADMIN_CHAT_IDS:-${SAHAR_ADMIN_CHAT_IDS:-}}"
+  SCHEDULER_INTERVAL="${SCHEDULER_INTERVAL:-300}"
+  AGENT_TIMEOUT="${AGENT_TIMEOUT:-15}"
+  WARN_DAYS_LEFT="${WARN_DAYS_LEFT:-3}"
+  WARN_USAGE_PERCENT="${WARN_USAGE_PERCENT:-80}"
+  BACKUP_INTERVAL_HOURS="${BACKUP_INTERVAL_HOURS:-24}"
+  BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
+  SUBSCRIPTION_BIND_HOST="${SUBSCRIPTION_BIND_HOST:-0.0.0.0}"
+  SUBSCRIPTION_BIND_PORT="${SUBSCRIPTION_BIND_PORT:-8090}"
+  detected_public_ip="$(detect_public_ipv4 || true)"
+  SUBSCRIPTION_BASE_URL="${SUBSCRIPTION_BASE_URL:-}"
+  if [[ -z "$SUBSCRIPTION_BASE_URL" && -n "$detected_public_ip" ]]; then
+    SUBSCRIPTION_BASE_URL="http://${detected_public_ip}:${SUBSCRIPTION_BIND_PORT}"
+  fi
+
+  CLOUDFLARE_ENABLED="$(parse_bool "${CLOUDFLARE_ENABLED:-false}")"
+  CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-}"
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-}"
+  CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+  if [[ "$CLOUDFLARE_ENABLED" != "true" ]]; then
     CLOUDFLARE_DOMAIN_NAME=""
     CLOUDFLARE_BASE_SUBDOMAIN=""
     CLOUDFLARE_API_TOKEN=""
   fi
-  CLOUDFLARE_TOKEN_ENCRYPTION_KEY="$(python3 - <<'PY2'
+  CLOUDFLARE_TOKEN_ENCRYPTION_KEY="${CLOUDFLARE_TOKEN_ENCRYPTION_KEY:-$(python3 - <<'PY2'
 import os, base64
 print(base64.urlsafe_b64encode(os.urandom(32)).decode())
 PY2
-)"
-  read -rp "Enable local VPN node on this master server? [Y/n]: " LOCAL_NODE_CHOICE
-  LOCAL_NODE_CHOICE="${LOCAL_NODE_CHOICE:-Y}"
-  if [[ "$LOCAL_NODE_CHOICE" =~ ^([Yy]|yes|YES)$ ]]; then
-    LOCAL_NODE_ENABLED=true
-  else
-    LOCAL_NODE_ENABLED=false
-  fi
+)}"
 
-  LOCAL_SERVER_NAME="local"
-  LOCAL_AGENT_API_URL=""
-  LOCAL_AGENT_API_TOKEN=""
-  LOCAL_AGENT_LISTEN_HOST="127.0.0.1"
-  LOCAL_AGENT_LISTEN_PORT="8787"
-  LOCAL_PUBLIC_HOST=""
-  LOCAL_HOST_MODE=""
+  LOCAL_NODE_ENABLED="$(parse_bool "${LOCAL_NODE_ENABLED:-false}")"
+  LOCAL_SERVER_NAME="${LOCAL_SERVER_NAME:-local}"
+  LOCAL_AGENT_LISTEN_HOST="${LOCAL_AGENT_LISTEN_HOST:-127.0.0.1}"
+  LOCAL_AGENT_LISTEN_PORT="${LOCAL_AGENT_LISTEN_PORT:-8787}"
   LOCAL_TRANSPORT_MODE="dual"
-  LOCAL_REALITY_SERVER_NAME=""
-  LOCAL_REALITY_DEST=""
-  LOCAL_FINGERPRINT="chrome"
-  LOCAL_XRAY_PORT="443"
-  LOCAL_REALITY_PORT="8443"
-  LOCAL_XRAY_API_PORT="10085"
+  LOCAL_REALITY_SERVER_NAME="${LOCAL_REALITY_SERVER_NAME:-www.cloudflare.com}"
+  LOCAL_REALITY_DEST="${LOCAL_REALITY_DEST:-${LOCAL_REALITY_SERVER_NAME}:443}"
+  LOCAL_FINGERPRINT="${LOCAL_FINGERPRINT:-chrome}"
+  LOCAL_XRAY_PORT="${LOCAL_XRAY_PORT:-443}"
+  LOCAL_REALITY_PORT="${LOCAL_REALITY_PORT:-8443}"
+  LOCAL_XRAY_API_PORT="${LOCAL_XRAY_API_PORT:-10085}"
+  LOCAL_AGENT_API_TOKEN="${LOCAL_AGENT_API_TOKEN:-}"
+  LOCAL_AGENT_API_URL=""
+  LOCAL_PUBLIC_HOST="$(first_nonempty "${LOCAL_PUBLIC_HOST:-}" "$detected_public_ip" "$(hostname -f 2>/dev/null || true)" "$(hostname 2>/dev/null || true)" || true)"
+  LOCAL_HOST_MODE="${LOCAL_HOST_MODE:-$(infer_host_mode "$LOCAL_PUBLIC_HOST")}"
 
-  if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    read -rp "Local server display name [local]: " LOCAL_SERVER_NAME
-    LOCAL_SERVER_NAME="${LOCAL_SERVER_NAME:-local}"
-    echo "Choose local node public host type:"
-    echo "1) IP"
-    echo "2) Domain"
-    read -rp "Select [1/2]: " LOCAL_HOST_TYPE
-    if [[ "$LOCAL_HOST_TYPE" == "1" ]]; then
-      LOCAL_HOST_MODE="ip"
-      read -rp "Local node public IP: " LOCAL_PUBLIC_HOST
-    elif [[ "$LOCAL_HOST_TYPE" == "2" ]]; then
-      LOCAL_HOST_MODE="domain"
-      read -rp "Local node domain or subdomain: " LOCAL_PUBLIC_HOST
-      read -rp "Have you already pointed DNS (A record) to this server IP? [y/n]: " DNS_READY
-      if [[ "$DNS_READY" != "y" && "$DNS_READY" != "Y" ]]; then
-        echo "Please create/update the A record first, then run the installer again."
-        exit 1
-      fi
-      if resolve_host_ready "$LOCAL_PUBLIC_HOST"; then
-        echo "Domain resolves successfully."
-      else
-        echo "Warning: domain does not resolve yet."
-        read -rp "Continue anyway? [y/n]: " CONTINUE_ANYWAY
-        if [[ "$CONTINUE_ANYWAY" != "y" && "$CONTINUE_ANYWAY" != "Y" ]]; then
-          exit 1
-        fi
-      fi
-    else
-      echo "Invalid option."
-      exit 1
-    fi
-    echo "This local node will install both profiles:"
-    echo "- VLESS | Simple"
-    echo "- VLESS | Reality"
-    read -rp "REALITY serverName/SNI (example: www.cloudflare.com): " LOCAL_REALITY_SERVER_NAME
-    read -rp "REALITY dest [default ${LOCAL_REALITY_SERVER_NAME}:443]: " LOCAL_REALITY_DEST
-    LOCAL_REALITY_DEST="${LOCAL_REALITY_DEST:-${LOCAL_REALITY_SERVER_NAME}:443}"
-    read -rp "Fingerprint [default chrome]: " LOCAL_FINGERPRINT
-    LOCAL_FINGERPRINT="${LOCAL_FINGERPRINT:-chrome}"
-
-    read -rp "Local node VLESS Simple port [443]: " LOCAL_XRAY_PORT
-    LOCAL_XRAY_PORT="${LOCAL_XRAY_PORT:-443}"
-    read -rp "Local node VLESS Reality port [8443]: " LOCAL_REALITY_PORT
-    LOCAL_REALITY_PORT="${LOCAL_REALITY_PORT:-8443}"
-    read -rp "Local node Xray API stats port [10085]: " LOCAL_XRAY_API_PORT
-    LOCAL_XRAY_API_PORT="${LOCAL_XRAY_API_PORT:-10085}"
-    read -rp "Local agent listen port [8787]: " LOCAL_AGENT_LISTEN_PORT
-    LOCAL_AGENT_LISTEN_PORT="${LOCAL_AGENT_LISTEN_PORT:-8787}"
-    read -rp "Local agent API token [leave blank to auto-generate]: " LOCAL_AGENT_API_TOKEN
+  if [[ "$LOCAL_NODE_ENABLED" == "true" ]]; then
     if [[ -z "$LOCAL_AGENT_API_TOKEN" ]]; then
       LOCAL_AGENT_API_TOKEN="$(python3 - <<'PY'
 import secrets
@@ -238,7 +227,24 @@ PY
 )"
     fi
     LOCAL_AGENT_API_URL="http://127.0.0.1:${LOCAL_AGENT_LISTEN_PORT}"
+    if [[ "$LOCAL_HOST_MODE" == "domain" && -n "$LOCAL_PUBLIC_HOST" ]] && ! resolve_host_ready "$LOCAL_PUBLIC_HOST"; then
+      echo "Warning: local node domain does not resolve yet: $LOCAL_PUBLIC_HOST"
+    fi
+  else
+    LOCAL_SERVER_NAME="local"
+    LOCAL_AGENT_API_URL=""
+    LOCAL_AGENT_API_TOKEN=""
+    LOCAL_PUBLIC_HOST=""
+    LOCAL_HOST_MODE=""
   fi
+}
+
+telegram_bot_enabled() {
+  [[ -n "${BOT_TOKEN:-}" ]]
+}
+
+ask_config() {
+  init_config_defaults
 }
 
 prepare_dirs() {
@@ -546,7 +552,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.22"
+  ua="SaharInstaller/0.1.23"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -635,13 +641,20 @@ enable_services() {
         sleep 2
       done
     fi
-    systemctl enable "$BOT_SERVICE_NAME" --now
-    systemctl enable "$SCHED_SERVICE_NAME" --now
     systemctl enable "$SUB_SERVICE_NAME" --now
+    if telegram_bot_enabled; then
+      systemctl enable "$BOT_SERVICE_NAME" --now
+      systemctl enable "$SCHED_SERVICE_NAME" --now
+    else
+      systemctl disable "$BOT_SERVICE_NAME" >/dev/null 2>&1 || true
+      systemctl disable "$SCHED_SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
   else
-    rc-update add "$BOT_SERVICE_NAME" default
-    rc-update add "$SCHED_SERVICE_NAME" default
     rc-update add "$SUB_SERVICE_NAME" default
+    if telegram_bot_enabled; then
+      rc-update add "$BOT_SERVICE_NAME" default
+      rc-update add "$SCHED_SERVICE_NAME" default
+    fi
     if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
       rc-update add xray default
       rc-service xray start
@@ -654,9 +667,11 @@ enable_services() {
         sleep 2
       done
     fi
-    rc-service "$BOT_SERVICE_NAME" start
-    rc-service "$SCHED_SERVICE_NAME" start
     rc-service "$SUB_SERVICE_NAME" start
+    if telegram_bot_enabled; then
+      rc-service "$BOT_SERVICE_NAME" start
+      rc-service "$SCHED_SERVICE_NAME" start
+    fi
   fi
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
     su -s /bin/sh "$SERVICE_USER" -c "SAHAR_CONFIG='$APP_DATA_DIR/config.json' '$VENV_DIR/bin/python' '$APP_APP_DIR/register_local_server.py'"
@@ -698,7 +713,13 @@ print_done() {
     echo "  tail -f $APP_LOG_DIR/*.log"
   fi
   echo "Subscription base URL: $SUBSCRIPTION_BASE_URL"
-  echo "Start in Telegram with /help"
+  if telegram_bot_enabled; then
+    echo "Start in Telegram with /help"
+  else
+    echo "Telegram bot service was not started because BOT_TOKEN is empty."
+    echo "Set BOT_TOKEN in $APP_DATA_DIR/config.json or reinstall with BOT_TOKEN=..."
+    echo "Then start: ${BOT_SERVICE_NAME} and ${SCHED_SERVICE_NAME}"
+  fi
 }
 
 

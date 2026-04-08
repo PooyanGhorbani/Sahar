@@ -1,3 +1,11 @@
+0.1.23
+- installer no longer asks interactive questions; defaults are applied automatically with optional env overrides
+- install.sh defaults to master mode when no argument is provided and auto-installs git in bootstrap packages
+- master installer now starts Telegram services only when BOT_TOKEN is provided
+- first private chat can auto-bootstrap itself as owner when no admins are preconfigured
+- agent installer now auto-detects public host and allowed source where possible
+- README updated for non-interactive install flow and env-based examples
+
 Sahar 0.1.22
 
 - installer: fixed Alpine Xray download flow to avoid GitHub API 403/JSON parse failure
