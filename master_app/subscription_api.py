@@ -25,6 +25,8 @@ def _profiles_for_server(server: dict) -> list[dict]:
             'public_host': server.get('public_host') or '',
             'port': int(server.get('xray_port') or 0),
             'fingerprint': server.get('fingerprint') or 'chrome',
+            'transport_mode': server.get('transport_mode') or 'ws',
+            'ws_path': server.get('ws_path') or '/ws',
         })
     if server.get('public_host') and int(server.get('reality_port') or 0) > 0 and server.get('reality_public_key') and server.get('reality_server_name'):
         profiles.append({
@@ -36,6 +38,8 @@ def _profiles_for_server(server: dict) -> list[dict]:
             'reality_public_key': server.get('reality_public_key') or '',
             'reality_short_id': server.get('reality_short_id') or '',
             'fingerprint': server.get('fingerprint') or 'chrome',
+            'transport_mode': server.get('transport_mode') or 'ws',
+            'ws_path': server.get('ws_path') or '/ws',
         })
     return profiles
 

@@ -65,7 +65,7 @@ def refresh_health_cache() -> int:
                     'public_host': health.get('public_host') or server.get('public_host') or '',
                     'host_mode': health.get('host_mode') or server.get('host_mode') or '',
                     'xray_port': int(health.get('xray_port') or server.get('xray_port') or 0),
-                    'transport_mode': health.get('transport_mode') or server.get('transport_mode') or 'tcp',
+                    'transport_mode': health.get('transport_mode') or server.get('transport_mode') or 'ws',
                     'reality_server_name': health.get('reality_server_name') or '',
                     'reality_public_key': health.get('reality_public_key') or '',
                     'reality_short_id': health.get('reality_short_id') or '',

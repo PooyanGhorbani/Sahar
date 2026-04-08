@@ -35,7 +35,8 @@ class Database:
                     public_host TEXT DEFAULT '',
                     host_mode TEXT DEFAULT '',
                     xray_port INTEGER DEFAULT 0,
-                    transport_mode TEXT DEFAULT 'tcp',
+                    transport_mode TEXT DEFAULT 'ws',
+                    ws_path TEXT DEFAULT '/ws',
                     reality_server_name TEXT DEFAULT '',
                     reality_public_key TEXT DEFAULT '',
                     reality_short_id TEXT DEFAULT '',
@@ -230,6 +231,15 @@ class Database:
         if column not in existing:
             conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {definition}')
 
+    def _ensure_server_schema(self, conn) -> None:
+        columns = {row['name'] for row in conn.execute("PRAGMA table_info(servers)").fetchall()}
+        if 'ws_path' not in columns:
+            conn.execute("ALTER TABLE servers ADD COLUMN ws_path TEXT DEFAULT '/ws'")
+        if 'transport_mode' in columns:
+            conn.execute("UPDATE servers SET transport_mode = 'ws' WHERE transport_mode IS NULL OR transport_mode = ''")
+        conn.execute("UPDATE servers SET ws_path = '/ws' WHERE ws_path IS NULL OR ws_path = ''")
+
+
     def _seed_default_plans(self, conn: sqlite3.Connection) -> None:
         now = '1970-01-01T00:00:00'
         rows = [
@@ -405,12 +415,12 @@ class Database:
                 '''
                 INSERT INTO servers (
                     name, api_url, api_token, public_host, host_mode, xray_port,
-                    transport_mode, reality_server_name, reality_public_key,
+                    transport_mode, ws_path, reality_server_name, reality_public_key,
                     reality_short_id, fingerprint, reality_port, enabled, last_health_status,
                     last_health_message, last_health_at, cpu_percent, memory_percent,
                     disk_percent, load_1m, user_count, xray_active, last_sync_at,
                     cf_zone_id, cf_record_id, cf_dns_name, provisioning_state, provisioning_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     api_url=excluded.api_url,
                     api_token=excluded.api_token,
@@ -418,6 +428,7 @@ class Database:
                     host_mode=excluded.host_mode,
                     xray_port=excluded.xray_port,
                     transport_mode=excluded.transport_mode,
+                    ws_path=excluded.ws_path,
                     reality_server_name=excluded.reality_server_name,
                     reality_public_key=excluded.reality_public_key,
                     reality_short_id=excluded.reality_short_id,
@@ -448,7 +459,8 @@ class Database:
                     server.get('public_host', ''),
                     server.get('host_mode', ''),
                     int(server.get('xray_port') or 0),
-                    server.get('transport_mode', 'tcp'),
+                    server.get('transport_mode', 'ws'),
+                    server.get('ws_path', '/ws'),
                     server.get('reality_server_name', ''),
                     server.get('reality_public_key', ''),
                     server.get('reality_short_id', ''),
@@ -612,7 +624,7 @@ class Database:
             row = conn.execute(
                 '''
                 SELECT u.*, s.name AS server_name, s.public_host, s.host_mode, s.xray_port,
-                       s.transport_mode, s.reality_server_name, s.reality_public_key,
+                       s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                        s.reality_short_id, s.fingerprint, s.reality_port
                 FROM users u
                 JOIN servers s ON s.id = u.server_id
@@ -732,7 +744,7 @@ class Database:
             rows = conn.execute(
                 '''
                 SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.public_host, s.host_mode,
-                       s.xray_port, s.transport_mode, s.reality_server_name, s.reality_public_key,
+                       s.xray_port, s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                        s.reality_short_id, s.fingerprint, s.reality_port
                 FROM users u
                 JOIN servers s ON s.id = u.server_id
@@ -845,7 +857,7 @@ class Database:
             row = conn.execute(
                 """
                 SELECT u.*, s.name AS server_name, s.public_host, s.host_mode, s.xray_port,
-                       s.transport_mode, s.reality_server_name, s.reality_public_key,
+                       s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                        s.reality_short_id, s.fingerprint, s.reality_port
                 FROM subscription_tokens st
                 JOIN users u ON u.id = st.user_id
@@ -859,7 +871,7 @@ class Database:
     def _users_with_server(self, where_clause: str, params: Iterable[Any]) -> List[Dict[str, Any]]:
         sql = f'''
             SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.public_host, s.host_mode,
-                   s.xray_port, s.transport_mode, s.reality_server_name, s.reality_public_key,
+                   s.xray_port, s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                    s.reality_short_id, s.fingerprint, s.reality_port
             FROM users u
             JOIN servers s ON s.id = u.server_id

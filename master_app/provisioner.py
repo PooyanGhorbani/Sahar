@@ -35,7 +35,7 @@ class SSHProvisioner:
         ssh_port: int,
         ssh_username: str,
         ssh_password: str,
-        transport_mode: str = 'tcp',
+        transport_mode: str = 'ws',
         agent_listen_port: int = 8787,
         xray_port: int = 443,
         xray_api_port: int = 10085,

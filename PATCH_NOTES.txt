@@ -1,4 +1,6 @@
-0.1.40
-- fix local node registration failure when log files are not writable yet
-- precreate and chown master log files before starting services and registering local node
-- make logging setup fall back safely when a file handler cannot be opened
+0.1.41
+- make subscription the primary user delivery flow in Telegram while keeping direct VLESS links available
+- switch the simple VLESS profile default from tcp to ws and add ws path support across master, agent, and subscription output
+- add Cloudflare management inside Telegram with a dedicated menu, runtime setting persistence, and DNS sync for registered servers
+- add missing master save_config/restart helpers so settings edited from Telegram persist correctly
+- add ws_path to server metadata and database schema with backward-compatible migration

@@ -8,7 +8,9 @@ import math
 import os
 import re
 import secrets
+import shutil
 import socket
+import subprocess
 import tempfile
 import time
 import uuid
@@ -41,6 +43,7 @@ from utils import (
     export_users_csv,
     load_config,
     now_iso,
+    save_config,
     setup_logging,
     systemctl_is_active,
     today_utc,
@@ -88,6 +91,21 @@ PLAN_PRESETS = [('trial', '🧪 تست'), ('bronze', '🥉 برنزی'), ('silve
 NOTE_PRESETS = [('manual', '🛠 دستی'), ('gift', '🎁 هدیه'), ('telegram', '📨 تلگرام'), ('support', '🎧 پشتیبانی'), ('urgent', '🚨 فوری')]
 TRAFFIC_PRESETS = [10, 20, 50, 100, 200, 500]
 DAY_PRESETS = [7, 30, 60, 90, 180, 365]
+
+EDITABLE_SETTINGS = {
+    'subscription_base_url': {'label': 'آدرس سابسکریپشن', 'type': 'text', 'allow_empty': True, 'services': ['sahar-master-subscription']},
+    'scheduler_interval_seconds': {'label': 'فاصله زمان‌بندی', 'type': 'int', 'min': 60, 'max': 86400, 'services': ['sahar-master-scheduler']},
+    'agent_timeout_seconds': {'label': 'تایم‌اوت ایجنت', 'type': 'int', 'min': 3, 'max': 120},
+    'warn_days_left': {'label': 'هشدار انقضا', 'type': 'int', 'min': 1, 'max': 30},
+    'warn_usage_percent': {'label': 'هشدار مصرف', 'type': 'int', 'min': 1, 'max': 100},
+    'backup_interval_hours': {'label': 'فاصله بکاپ', 'type': 'int', 'min': 1, 'max': 168},
+    'backup_retention': {'label': 'نگه‌داری بکاپ', 'type': 'int', 'min': 1, 'max': 100},
+    'cloudflare_enabled': {'label': 'کلودفلر فعال', 'type': 'bool'},
+    'cloudflare_domain_name': {'label': 'دامنه کلودفلر', 'type': 'text', 'allow_empty': True},
+    'cloudflare_base_subdomain': {'label': 'ساب‌دامین پایه', 'type': 'text', 'allow_empty': True},
+    'cloudflare_dns_proxied': {'label': 'پروکسی کلودفلر', 'type': 'bool'},
+    'cloudflare_api_token': {'label': 'توکن API کلودفلر', 'type': 'secret'},
+}
 
 
 def bootstrap_admins() -> None:
@@ -327,7 +345,8 @@ def refresh_server_metadata(server_name: str) -> Tuple[Dict[str, Any], Dict[str,
         'public_host': health.get('public_host') or server.get('public_host') or '',
         'host_mode': health.get('host_mode') or server.get('host_mode') or '',
         'xray_port': int(health.get('simple_port') or health.get('xray_port') or server.get('xray_port') or 0),
-        'transport_mode': health.get('transport_mode') or server.get('transport_mode') or 'tcp',
+        'transport_mode': health.get('transport_mode') or server.get('transport_mode') or 'ws',
+        'ws_path': health.get('ws_path') or server.get('ws_path') or '/ws',
         'reality_server_name': health.get('reality_server_name') or server.get('reality_server_name') or '',
         'reality_public_key': health.get('reality_public_key') or server.get('reality_public_key') or '',
         'reality_short_id': health.get('reality_short_id') or server.get('reality_short_id') or '',
@@ -599,7 +618,8 @@ def servers_page_markup(servers: List[Dict[str, Any]], page: int) -> InlineKeybo
 def user_detail_markup(user: Dict[str, Any]) -> InlineKeyboardMarkup:
     username = user['username']
     return InlineKeyboardMarkup([
-        [_menu_button('🔗 لینک', f'act:link:{username}'), _menu_button('📷 QR', f'act:qr:{username}')],
+        [_menu_button('📡 سابسکریپشن', f'act:subscription:{username}'), _menu_button('🔗 لینک مستقیم', f'act:link:{username}')],
+        [_menu_button('📷 QR', f'act:qr:{username}')],
         [_menu_button('♻️ ریست مصرف', f'act:reset_usage:{username}'), _menu_button('⛔ غیرفعال', f'act:confirm:disable:{username}')],
         [_menu_button('✅ فعال', f'act:enable:{username}'), _menu_button('🗑 حذف', f'act:confirm:delete:{username}')],
         [_menu_button('🏠 خانه', 'menu:home')],
@@ -630,6 +650,7 @@ def tools_menu_markup() -> InlineKeyboardMarkup:
         [_menu_button('💾 بکاپ', 'tool:backup_now'), _menu_button('📤 ارسال بکاپ', 'tool:send_backup')],
         [_menu_button('📄 CSV کاربران', 'tool:export_users'), _menu_button('📊 وضعیت', 'tool:status')],
         [_menu_button('🛡 ادمین‌ها', 'tool:list_admins'), _menu_button('📦 پلن‌ها', 'tool:list_plans')],
+        [_menu_button('☁️ کلودفلر', 'tool:cloudflare')],
         [_menu_button('🏠 خانه', 'menu:home')],
     ])
 
@@ -758,6 +779,7 @@ def settings_menu_markup() -> InlineKeyboardMarkup:
         'cloudflare_enabled',
         'cloudflare_domain_name',
         'cloudflare_base_subdomain',
+        'cloudflare_dns_proxied',
         'cloudflare_api_token',
     ]
     rows = [[_menu_button(f"⚙️ {EDITABLE_SETTINGS[key]['label']}", f'setting:edit:{key}')] for key in order]
@@ -786,6 +808,19 @@ def refresh_runtime_config() -> None:
 
 def persist_master_config() -> None:
     save_config(CONFIG_PATH, config)
+
+
+def schedule_service_restart(services: tuple[str, ...]) -> None:
+    for service in services:
+        try:
+            if not service:
+                continue
+            if os.path.isdir('/run/systemd/system') and shutil.which('systemctl'):
+                subprocess.run(['systemctl', 'restart', service], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif shutil.which('rc-service'):
+                subprocess.run(['rc-service', service, 'restart'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            LOGGER.exception('service_restart_failed service=%s', service)
 
 
 def parse_setting_value(key: str, raw: str) -> tuple[Any, str]:
@@ -828,6 +863,52 @@ def apply_setting_change(key: str, value: Any) -> str:
     if services:
         schedule_service_restart(services)
     return setting_display_value(key)
+
+
+
+
+def cloudflare_menu_markup() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_menu_button('☁️ فعال/غیرفعال', 'setting:edit:cloudflare_enabled')],
+        [_menu_button('🌐 دامنه', 'setting:edit:cloudflare_domain_name')],
+        [_menu_button('🧩 ساب‌دامین پایه', 'setting:edit:cloudflare_base_subdomain')],
+        [_menu_button('🛡 پروکسی DNS', 'setting:edit:cloudflare_dns_proxied')],
+        [_menu_button('🔑 توکن API', 'setting:edit:cloudflare_api_token')],
+        [_menu_button('🔄 سینک DNS سرورها', 'act:cloudflare_sync_all')],
+        [_menu_button('↩️ ابزارها', 'menu:tools'), _menu_button('🏠 خانه', 'menu:home')],
+    ])
+
+
+def cloudflare_text() -> str:
+    token_state = 'configured' if CLOUDFLARE.get_token() else 'not set'
+    lines = [
+        f"• فعال: <code>{'on' if config.get('cloudflare_enabled') else 'off'}</code>",
+        f"• دامنه: <code>{config.get('cloudflare_domain_name') or '-'}</code>",
+        f"• ساب‌دامین پایه: <code>{config.get('cloudflare_base_subdomain') or '-'}</code>",
+        f"• پروکسی: <code>{'on' if config.get('cloudflare_dns_proxied') else 'off'}</code>",
+        f"• توکن: <code>{token_state}</code>",
+    ]
+    return list_text('مدیریت Cloudflare', lines)
+
+
+async def show_cloudflare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await respond(update, cloudflare_text(), cloudflare_menu_markup())
+
+
+def sync_cloudflare_records() -> tuple[int, list[str]]:
+    synced = []
+    for server in DB.list_servers(enabled_only=True):
+        target = str(server.get('public_host') or '').strip()
+        if not target:
+            continue
+        try:
+            target_ip = _resolve_target_ip_for_dns(target)
+            info = CLOUDFLARE.ensure_server_dns(server['name'], target_ip)
+            DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso())
+            synced.append(info['dns_name'])
+        except Exception:
+            LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
+    return len(synced), synced
 
 
 async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -914,7 +995,10 @@ def health_report_text() -> str:
     return '\n'.join(lines)
 
 def user_text(user: Dict[str, Any]) -> str:
-    link = build_vless_link(user)
+    direct_link = build_vless_link(user)
+    subscription_link = subscription_url_for_user(user['username'])
+    direct_link_html = html.escape(direct_link)
+    subscription_link_html = html.escape(subscription_link)
     return (
         f"<b>کاربر: {user['username']}</b>\n"
         f"🖥 سرور: {user['server_name']}\n"
@@ -926,17 +1010,17 @@ def user_text(user: Dict[str, Any]) -> str:
         f"🏷 پلن: {resolve_plan_label(user.get('plan') or '')}\n"
         f"📌 یادداشت: {user.get('notes') or '-'}\n"
         f"🔘 وضعیت: {'فعال' if user['is_active'] else 'غیرفعال'}\n\n"
-        f"<code>{link}</code>"
+        f"📡 سابسکریپشن: <code>{subscription_link_html}</code>\n\n"
+        f"🔗 لینک مستقیم: <code>{direct_link_html}</code>"
     )
-
-
 def server_text(server: Dict[str, Any]) -> str:
     return (
         f"<b>سرور: {server['name']}</b>\n"
         f"🌐 API: <code>{server['api_url']}</code>\n"
         f"📡 Public host: {server.get('public_host') or '-'}\n"
         f"🔌 Port: {server.get('xray_port') or '-'}\n"
-        f"🚚 Transport: {server.get('transport_mode') or 'tcp'}\n"
+        f"🚚 Transport: {server.get('transport_mode') or 'ws'}\n"
+        f"🛣 WS Path: {server.get('ws_path') or '/ws'}\n"
         f"💚 Health: {server.get('last_health_status') or 'unknown'}\n"
         f"📝 Health msg: {server.get('last_health_message') or '-'}\n"
         f"⏰ Last check: {server.get('last_health_at') or '-'}\n"
@@ -1038,6 +1122,7 @@ async def show_tools(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         '• ساخت بکاپ از مستر و نودها',
         '• ارسال آخرین بکاپ به تلگرام',
         '• خروجی CSV کاربران',
+        '• تنظیم کلودفلر و DNS از داخل تلگرام',
         '• بازگشت به داشبورد',
     ]
     if latest_backup:
@@ -1090,7 +1175,8 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
             'public_host': existing.get('public_host', '') if existing else '',
             'host_mode': existing.get('host_mode', '') if existing else '',
             'xray_port': int(existing.get('xray_port') or 0) if existing else 0,
-            'transport_mode': existing.get('transport_mode', 'tcp') if existing else 'tcp',
+            'transport_mode': existing.get('transport_mode', 'ws') if existing else 'ws',
+            'ws_path': existing.get('ws_path', '/ws') if existing else '/ws',
             'reality_server_name': existing.get('reality_server_name', '') if existing else '',
             'reality_public_key': existing.get('reality_public_key', '') if existing else '',
             'reality_short_id': existing.get('reality_short_id', '') if existing else '',
@@ -1117,7 +1203,8 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
                 'host_mode': health.get('host_mode', ''),
                 'xray_port': int(health.get('simple_port') or health.get('xray_port') or 0),
                 'reality_port': int(health.get('reality_port') or 0),
-                'transport_mode': health.get('transport_mode', 'tcp'),
+                'transport_mode': health.get('transport_mode', 'ws'),
+                'ws_path': health.get('ws_path', '/ws'),
                 'reality_server_name': health.get('reality_server_name', ''),
                 'reality_public_key': health.get('reality_public_key', ''),
                 'reality_short_id': health.get('reality_short_id', ''),
@@ -1221,7 +1308,7 @@ async def subscription_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user:
         await send_temp(update, '❌ کاربر پیدا نشد')
         return
-    await send_temp(update, f"🔗 لینک ثابت سابسکریپشن: <code>{subscription_url_for_user(username)}</code>")
+    await send_temp(update, f"🔗 لینک ثابت سابسکریپشن: <code>{html.escape(subscription_url_for_user(username))}</code>")
 
 
 @role_required('admin')
@@ -1234,7 +1321,7 @@ async def set_access_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_temp(update, '❌ کاربر پیدا نشد')
         return
     set_user_access_all(user)
-    await send_temp(update, f"✅ دسترسی {user['username']} روی همه سرورها باز شد. <code>{subscription_url_for_user(user['username'])}</code>")
+    await send_temp(update, f"✅ دسترسی {user['username']} روی همه سرورها باز شد. <code>{html.escape(subscription_url_for_user(user['username']))}</code>")
 
 
 @role_required('admin')
@@ -1249,7 +1336,7 @@ async def set_access_selected_cmd(update: Update, context: ContextTypes.DEFAULT_
         await send_temp(update, '❌ کاربر پیدا نشد')
         return
     set_user_access_selected(user, names)
-    await send_temp(update, f"✅ دسترسی {username} روی سرورهای انتخابی تنظیم شد. <code>{subscription_url_for_user(username)}</code>")
+    await send_temp(update, f"✅ دسترسی {username} روی سرورهای انتخابی تنظیم شد. <code>{html.escape(subscription_url_for_user(username))}</code>")
 @role_required('admin')
 async def grant_server_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) != 2:
@@ -1417,6 +1504,11 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await show_settings(update, context)
 
 
+@role_required('owner')
+async def cloudflare_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_cloudflare(update, context)
+
+
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_prompt(context)
     clear_wizard(context)
@@ -1450,6 +1542,11 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if await deny_if_not_admin(update, 'owner'):
                 return
             await show_settings(update, context)
+            return
+        if data == 'tool:cloudflare':
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            await show_cloudflare(update, context)
             return
         if data.startswith('setting:edit:'):
             if await deny_if_not_admin(update, 'owner'):
@@ -1710,6 +1807,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_reports(update, context)
         elif data == 'menu:tools':
             await show_tools(update, context)
+        elif data == 'tool:cloudflare':
+            await show_cloudflare(update, context)
         elif data == 'menu:help':
             await show_help(update, context)
         elif data.startswith('user:'):
@@ -1737,11 +1836,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 'add_admin_button': 'چت‌آیدی را بفرست.',
             }
             await send_temp(update, prompt_map.get(action.split(':', 1)[0], 'ورودی موردنیاز را بفرست.'))
+        elif data.startswith('act:subscription:'):
+            username = data.split(':', 2)[2]
+            user = DB.get_user(username)
+            if user:
+                await send_temp(update, f"<code>{html.escape(subscription_url_for_user(username))}</code>")
+        elif data == 'act:cloudflare_sync_all':
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            count, names = sync_cloudflare_records()
+            if count:
+                await send_temp(update, '✅ رکوردهای DNS به‌روزرسانی شدند:\n' + '\n'.join(names[:20]))
+            else:
+                await send_temp(update, 'ℹ️ هیچ رکوردی برای سینک پیدا نشد یا Cloudflare هنوز تنظیم نشده است.')
         elif data.startswith('act:link:'):
             username = data.split(':', 2)[2]
             user = DB.get_user(username)
             if user:
-                await send_temp(update, f"<code>{build_vless_link(user)}</code>")
+                await send_temp(update, f"<code>{html.escape(build_vless_link(user))}</code>")
         elif data.startswith('act:qr:'):
             username = data.split(':', 2)[2]
             user = DB.get_user(username)
@@ -2193,6 +2305,7 @@ def main() -> None:
     application.add_handler(CommandHandler('list_admins', list_admins_cmd))
     application.add_handler(CommandHandler('list_plans', list_plans_cmd))
     application.add_handler(CommandHandler('settings', settings_cmd))
+    application.add_handler(CommandHandler('cloudflare', cloudflare_cmd))
     application.add_handler(CommandHandler('add_admin', add_admin_cmd))
     application.add_handler(CommandHandler('remove_admin', remove_admin_cmd))
     application.add_handler(CommandHandler('cancel', cancel_cmd))

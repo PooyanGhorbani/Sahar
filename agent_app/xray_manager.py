@@ -22,6 +22,10 @@ class XrayManager:
         self.simple_port = int(config.get('simple_port') or config.get('xray_port') or 443)
         self.reality_port = int(config.get('reality_port') or 8443)
         self.api_port = int(config.get('xray_api_port', 10085))
+        self.transport_mode = str(config.get('transport_mode') or 'ws').lower()
+        self.ws_path = str(config.get('ws_path') or '/ws')
+        if not self.ws_path.startswith('/'):
+            self.ws_path = '/' + self.ws_path
         self.reality_server_name = config.get('reality_server_name', '')
         self.reality_dest = config.get('reality_dest', '')
         self.reality_private_key = config.get('reality_private_key', '')
@@ -71,6 +75,13 @@ class XrayManager:
         self._save_atomic(base)
 
     def _simple_inbound(self, clients: List[Dict]) -> Dict:
+        stream_settings = {'network': 'tcp', 'security': 'none'}
+        if self.transport_mode != 'tcp':
+            stream_settings = {
+                'network': 'ws',
+                'security': 'none',
+                'wsSettings': {'path': self.ws_path},
+            }
         return {
             'tag': 'vless-simple',
             'listen': '0.0.0.0',
@@ -78,7 +89,7 @@ class XrayManager:
             'protocol': 'vless',
             'settings': {'clients': clients, 'decryption': 'none'},
             'sniffing': {'enabled': True, 'destOverride': ['http', 'tls', 'quic']},
-            'streamSettings': {'network': 'tcp', 'security': 'none'},
+            'streamSettings': stream_settings,
         }
 
     def _reality_inbound(self, clients: List[Dict]) -> Dict:
@@ -219,6 +230,8 @@ class XrayManager:
                 'port': self.simple_port,
                 'enabled': True,
                 'security': 'none',
+                'transport_mode': self.transport_mode,
+                'ws_path': self.ws_path,
             },
             {
                 'profile_key': 'reality',
@@ -243,7 +256,8 @@ class XrayManager:
             'xray_port': self.simple_port,
             'simple_port': self.simple_port,
             'reality_port': self.reality_port,
-            'transport_mode': 'dual',
+            'transport_mode': self.transport_mode,
+            'ws_path': self.ws_path,
             'reality_server_name': self.reality_server_name,
             'reality_public_key': self.reality_public_key,
             'reality_short_id': self.reality_short_id,

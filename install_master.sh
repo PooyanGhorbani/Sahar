@@ -374,7 +374,8 @@ PY2
   LOCAL_SERVER_NAME="${LOCAL_SERVER_NAME:-local}"
   LOCAL_AGENT_LISTEN_HOST="${LOCAL_AGENT_LISTEN_HOST:-127.0.0.1}"
   LOCAL_AGENT_LISTEN_PORT="${LOCAL_AGENT_LISTEN_PORT:-8787}"
-  LOCAL_TRANSPORT_MODE="dual"
+  LOCAL_TRANSPORT_MODE="ws"
+  LOCAL_WS_PATH="${LOCAL_WS_PATH:-/ws}"
   LOCAL_REALITY_SERVER_NAME="${LOCAL_REALITY_SERVER_NAME:-www.cloudflare.com}"
   LOCAL_REALITY_DEST="${LOCAL_REALITY_DEST:-${LOCAL_REALITY_SERVER_NAME}:443}"
   LOCAL_FINGERPRINT="${LOCAL_FINGERPRINT:-chrome}"
@@ -553,6 +554,7 @@ JSON
   "xray_api_port": $LOCAL_XRAY_API_PORT,
   "xray_config_path": "$XRAY_CONFIG_PATH",
   "transport_mode": "$LOCAL_TRANSPORT_MODE",
+  "ws_path": "$LOCAL_WS_PATH",
   "reality_server_name": "$LOCAL_REALITY_SERVER_NAME",
   "reality_dest": "$LOCAL_REALITY_DEST",
   "reality_public_key": "",
@@ -796,7 +798,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.40"
+  ua="SaharInstaller/0.1.41"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then

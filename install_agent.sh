@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.40"
+APP_VERSION="0.1.41"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -91,7 +91,7 @@ draw_screen() {
 ' "$C_BOLD" "$C_CYAN" "$APP_VERSION" "$C_RESET"
   printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
 ' "$C_DIM" "$C_RESET"
-  printf ' %sMode%s        Master
+  printf ' %sMode%s        Agent
 ' "$C_DIM" "$C_RESET"
   printf ' %sSystem%s      %s
 ' "$C_DIM" "$C_RESET" "${OS_PRETTY_NAME:-Detecting...}"
@@ -339,7 +339,8 @@ default_public_host() {
 load_noninteractive_env() {
   PUBLIC_HOST="${PUBLIC_HOST:-$(default_public_host)}"
   HOST_MODE="${HOST_MODE:-$(infer_host_mode "${PUBLIC_HOST:-}")}"
-  TRANSPORT_MODE="dual"
+  TRANSPORT_MODE="ws"
+  WS_PATH="${WS_PATH:-/ws}"
   FINGERPRINT="${FINGERPRINT:-chrome}"
   REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.cloudflare.com}"
   REALITY_DEST="${REALITY_DEST:-${REALITY_SERVER_NAME}:443}"
@@ -404,6 +405,7 @@ ask_transport_mode() {
   echo "- VLESS | Simple"
   echo "- VLESS | Reality"
   FINGERPRINT="chrome"
+  WS_PATH="${WS_PATH:-/ws}"
   read -rp "REALITY serverName/SNI (example: www.cloudflare.com): " REALITY_SERVER_NAME
   read -rp "REALITY dest [default ${REALITY_SERVER_NAME}:443]: " REALITY_DEST
   REALITY_DEST="${REALITY_DEST:-${REALITY_SERVER_NAME}:443}"
@@ -460,7 +462,7 @@ map_xray_arch() {
 
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.40"
+  ua="SaharInstaller/0.1.41"
   latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
 
   if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 "$latest_url" -o "$output_zip"; then
@@ -557,6 +559,7 @@ write_config() {
   "xray_api_port": $XRAY_API_PORT,
   "xray_config_path": "$XRAY_CONFIG_PATH",
   "transport_mode": "$TRANSPORT_MODE",
+  "ws_path": "$WS_PATH",
   "reality_server_name": "$REALITY_SERVER_NAME",
   "reality_dest": "$REALITY_DEST",
   "reality_public_key": "",

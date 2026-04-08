@@ -28,6 +28,15 @@ def load_config(path: str) -> Dict:
     return data
 
 
+def save_config(path: str, data: Dict) -> None:
+    payload = dict(data)
+    payload.pop('admin_ids', None)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, 'w', encoding='utf-8') as fh:
+        json.dump(payload, fh, indent=2, ensure_ascii=False)
+
+
 
 def setup_logging(log_path: str) -> None:
     log_path_obj = Path(log_path)
@@ -136,15 +145,19 @@ def detect_service_manager() -> str:
     return 'unknown'
 
 
+DEFAULT_WS_PATH = '/ws'
+
+
+def normalized_ws_path(value: str) -> str:
+    raw = str(value or '').strip()
+    if not raw:
+        return DEFAULT_WS_PATH
+    return raw if raw.startswith('/') else f'/{raw}'
+
+
 def pick_primary_profile(user: Dict) -> Dict:
     transport_mode = str(user.get('transport_mode') or '').lower()
-    has_reality = bool(user.get('reality_server_name') and user.get('reality_public_key'))
-    if transport_mode == 'reality':
-        profile_key = 'reality'
-    elif transport_mode == 'dual' and has_reality:
-        profile_key = 'reality'
-    else:
-        profile_key = 'simple'
+    profile_key = 'reality' if transport_mode == 'reality' else 'simple'
 
     if profile_key == 'reality':
         port = int(user.get('reality_port') or user.get('xray_port') or user.get('simple_port') or 0)
@@ -155,11 +168,14 @@ def pick_primary_profile(user: Dict) -> Dict:
         'public_host': user['public_host'],
         'port': port,
         'profile_key': profile_key,
+        'transport_mode': transport_mode or 'ws',
+        'ws_path': normalized_ws_path(user.get('ws_path') or DEFAULT_WS_PATH),
         'reality_server_name': user.get('reality_server_name') or '',
         'reality_public_key': user.get('reality_public_key') or '',
         'reality_short_id': user.get('reality_short_id') or '',
         'fingerprint': user.get('fingerprint') or 'chrome',
     }
+
 
 def build_vless_link_for_profile(uuid_value: str, username: str, profile: Dict) -> str:
     host = profile['public_host']
@@ -178,7 +194,17 @@ def build_vless_link_for_profile(uuid_value: str, username: str, profile: Dict) 
             f"&sni={sni}&fp={fingerprint}&pbk={public_key}&sid={short_id}&type=tcp#{username_q}"
         )
 
-    return f"vless://{uuid_value}@{host}:{port}?encryption=none&security=none&type=tcp#{username_q}"
+    transport_mode = str(profile.get('transport_mode') or 'ws').lower()
+    if transport_mode == 'tcp':
+        return f"vless://{uuid_value}@{host}:{port}?encryption=none&security=none&type=tcp#{username_q}"
+
+    ws_path = quote(normalized_ws_path(profile.get('ws_path') or DEFAULT_WS_PATH), safe='/')
+    host_header = quote(str(profile.get('host_header') or host))
+    return (
+        f"vless://{uuid_value}@{host}:{port}"
+        f"?encryption=none&security=none&type=ws&host={host_header}&path={ws_path}#{username_q}"
+    )
+
 
 def build_vless_link(user: Dict) -> str:
     profile = pick_primary_profile(user)
