@@ -59,13 +59,6 @@ advance_spinner() {
 
 progress_bar() {
   display_step=$CURRENT_STEP
-  case "$CURRENT_STATUS" in
-    Running*)
-      if [ "$display_step" -lt "$TOTAL_STEPS" ]; then
-        display_step=$((display_step + 1))
-      fi
-      ;;
-  esac
   done_slots=$((display_step * BAR_WIDTH / TOTAL_STEPS))
   pending_slots=$((BAR_WIDTH - done_slots))
   fill=$(printf '%*s' "$done_slots" '')
@@ -84,13 +77,6 @@ draw_screen() {
     return 0
   fi
   display_step=$CURRENT_STEP
-  case "$CURRENT_STATUS" in
-    Running*)
-      if [ "$display_step" -lt "$TOTAL_STEPS" ]; then
-        display_step=$((display_step + 1))
-      fi
-      ;;
-  esac
   percent=$((display_step * 100 / TOTAL_STEPS))
   step_no=$((CURRENT_STEP + 1))
   if [ "$step_no" -gt "$TOTAL_STEPS" ]; then

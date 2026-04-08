@@ -1,3 +1,7 @@
+## 0.1.52
+- Fixed the bootstrap installer progress bar so the final running step no longer shows 100% before the bootstrap actually completes.
+- Bootstrap progress now reflects completed steps only, which prevents misleading full-progress screens during the handoff stage.
+
 Sahar 0.1.50
 
 - Improved installer feedback during the Python environment stage so the screen now shows whether it is preparing a venv, refreshing pip tooling, building wheels, using cached wheels, installing from the cached wheelhouse, or reusing the cached Python environment.
