@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hmac
 import functools
+import hmac
 import ipaddress
 import json
 import logging
@@ -9,6 +9,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -20,10 +21,18 @@ def load_config(path: str) -> Dict:
 
 
 def save_config(path: str, data: Dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as fh:
-        json.dump(data, fh, indent=2)
-
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=path_obj.name + '.', suffix='.tmp', dir=str(path_obj.parent))
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def setup_logging(log_path: str) -> None:
@@ -115,7 +124,7 @@ def parse_allowed_sources(raw: str) -> List[str]:
 def source_allowed(remote_ip: str, allowed_sources: Iterable[str]) -> bool:
     allowed = list(allowed_sources)
     if not allowed:
-        return True
+        return False
     try:
         ip_obj = ipaddress.ip_address((remote_ip or '').strip())
     except ValueError:
@@ -134,8 +143,6 @@ def source_allowed(remote_ip: str, allowed_sources: Iterable[str]) -> bool:
 
 def safe_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(str(a), str(b))
-
-
 
 
 @functools.lru_cache(maxsize=1)
@@ -173,6 +180,7 @@ def service_is_active(service_name: str) -> bool:
     except Exception:
         return False
     return False
+
 
 def xray_version() -> str:
     try:

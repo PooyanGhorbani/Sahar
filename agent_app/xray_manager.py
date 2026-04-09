@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
 import subprocess
 import tarfile
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -33,6 +35,7 @@ class XrayManager:
         self.reality_short_id = config.get('reality_short_id', '')
         self.fingerprint = config.get('fingerprint', 'chrome')
         self.backup_dir = config.get('backup_dir', '/opt/sahar-agent/backups')
+        self.lock_path = self.config_path + '.lock'
 
     def ensure_runtime_settings(self) -> Dict:
         updated = False
@@ -64,15 +67,16 @@ class XrayManager:
 
     def ensure_base_config(self) -> None:
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        if os.path.exists(self.config_path):
-            try:
-                current = self._load()
-                if current.get('inbounds'):
-                    return
-            except Exception:
-                pass
-        base = self._build_base_config([], [])
-        self._save_atomic(base)
+        with self._config_lock():
+            if os.path.exists(self.config_path):
+                try:
+                    current = self._load()
+                    if current.get('inbounds'):
+                        return
+                except Exception:
+                    pass
+            base = self._build_base_config([], [])
+            self._save_atomic(base)
 
     def _simple_inbound(self, clients: List[Dict]) -> Dict:
         stream_settings = {'network': 'tcp', 'security': 'none'}
@@ -170,6 +174,17 @@ class XrayManager:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
+    @contextmanager
+    def _config_lock(self):
+        lock_dir = os.path.dirname(self.lock_path) or '.'
+        os.makedirs(lock_dir, exist_ok=True)
+        with open(self.lock_path, 'a+', encoding='utf-8') as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
     def _find_inbound(self, data: Dict, tag: str) -> Dict:
         for inbound in data.get('inbounds', []):
             if inbound.get('tag') == tag:
@@ -181,31 +196,33 @@ class XrayManager:
         return self._find_inbound(data, 'vless-simple')['settings']['clients']
 
     def add_client(self, username: str, uuid_value: str) -> Dict:
-        data = self._load()
-        simple_clients = self._find_inbound(data, 'vless-simple')['settings']['clients']
-        reality_clients = self._find_inbound(data, 'vless-reality')['settings']['clients']
-        for client in simple_clients:
-            if client.get('email') == username:
-                return client
-        simple_client = {'id': uuid_value, 'email': username, 'level': 0}
-        reality_client = {'id': uuid_value, 'email': username, 'level': 0, 'flow': 'xtls-rprx-vision'}
-        simple_clients.append(simple_client)
-        reality_clients.append(reality_client)
-        self._save_atomic(data)
+        with self._config_lock():
+            data = self._load()
+            simple_clients = self._find_inbound(data, 'vless-simple')['settings']['clients']
+            reality_clients = self._find_inbound(data, 'vless-reality')['settings']['clients']
+            for client in simple_clients:
+                if client.get('email') == username:
+                    return client
+            simple_client = {'id': uuid_value, 'email': username, 'level': 0}
+            reality_client = {'id': uuid_value, 'email': username, 'level': 0, 'flow': 'xtls-rprx-vision'}
+            simple_clients.append(simple_client)
+            reality_clients.append(reality_client)
+            self._save_atomic(data)
         self.restart_service()
         return simple_client
 
     def remove_client(self, username: str) -> bool:
-        data = self._load()
-        simple_clients = self._find_inbound(data, 'vless-simple')['settings']['clients']
-        reality_clients = self._find_inbound(data, 'vless-reality')['settings']['clients']
-        new_simple = [client for client in simple_clients if client.get('email') != username]
-        new_reality = [client for client in reality_clients if client.get('email') != username]
-        if len(new_simple) == len(simple_clients) and len(new_reality) == len(reality_clients):
-            return False
-        self._find_inbound(data, 'vless-simple')['settings']['clients'] = new_simple
-        self._find_inbound(data, 'vless-reality')['settings']['clients'] = new_reality
-        self._save_atomic(data)
+        with self._config_lock():
+            data = self._load()
+            simple_clients = self._find_inbound(data, 'vless-simple')['settings']['clients']
+            reality_clients = self._find_inbound(data, 'vless-reality')['settings']['clients']
+            new_simple = [client for client in simple_clients if client.get('email') != username]
+            new_reality = [client for client in reality_clients if client.get('email') != username]
+            if len(new_simple) == len(simple_clients) and len(new_reality) == len(reality_clients):
+                return False
+            self._find_inbound(data, 'vless-simple')['settings']['clients'] = new_simple
+            self._find_inbound(data, 'vless-reality')['settings']['clients'] = new_reality
+            self._save_atomic(data)
         self.restart_service()
         return True
 

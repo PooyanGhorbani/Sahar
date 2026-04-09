@@ -28,6 +28,7 @@ def _fallback_server_payload(name: str, api_url: str, api_token: str) -> dict:
         'name': name,
         'api_url': api_url,
         'api_token': api_token,
+        'api_tls_fingerprint': CONFIG.get('local_agent_api_tls_fingerprint', ''),
         'public_host': '',
         'host_mode': 'ip',
         'xray_port': 0,
@@ -37,6 +38,7 @@ def _fallback_server_payload(name: str, api_url: str, api_token: str) -> dict:
         'reality_public_key': '',
         'reality_short_id': '',
         'fingerprint': 'chrome',
+        'api_tls_fingerprint': CONFIG.get('local_agent_api_tls_fingerprint', ''),
         'reality_port': 0,
         'enabled': True,
         'last_health_status': 'warn',
@@ -93,7 +95,7 @@ def register() -> None:
     api_token = CONFIG.get('local_agent_api_token', '')
     if not api_token:
         raise RuntimeError('local agent token missing from config')
-    client = AgentClient(api_url, api_token, timeout=int(CONFIG.get('agent_timeout_seconds', 15)))
+    client = AgentClient(api_url, api_token, timeout=int(CONFIG.get('agent_timeout_seconds', 15)), tls_fingerprint=CONFIG.get('local_agent_api_tls_fingerprint', ''))
     try:
         meta = _fetch_local_agent_metadata(client)
         health_status = 'ok'
@@ -114,6 +116,7 @@ def register() -> None:
         'name': name,
         'api_url': api_url,
         'api_token': api_token,
+        'api_tls_fingerprint': CONFIG.get('local_agent_api_tls_fingerprint', ''),
         'public_host': meta.get('public_host', ''),
         'host_mode': meta.get('host_mode', ''),
         'xray_port': int(meta.get('simple_port') or meta.get('xray_port') or 0),
@@ -123,6 +126,7 @@ def register() -> None:
         'reality_public_key': meta.get('reality_public_key', ''),
         'reality_short_id': meta.get('reality_short_id', ''),
         'fingerprint': meta.get('fingerprint', 'chrome'),
+        'api_tls_fingerprint': meta.get('tls_fingerprint', CONFIG.get('local_agent_api_tls_fingerprint', '')),
         'reality_port': int(meta.get('reality_port', 0) or 0),
         'enabled': True,
         'last_health_status': health_status,

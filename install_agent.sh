@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.52"
+APP_VERSION="0.1.55"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -19,7 +19,7 @@ WHEELHOUSE_DIR="$CACHE_DIR/wheelhouse/agent"
 
 LOG_FILE="/tmp/sahar-agent-installer.log"
 STATUS_FILE="/tmp/sahar-agent-installer.status"
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 CURRENT_STEP=0
 BAR_WIDTH=40
 CURRENT_LABEL="Preparing installer"
@@ -40,6 +40,7 @@ OS_VERSION_ID=""
 OS_PRETTY_NAME=""
 OS_FAMILY=""
 INIT_SYSTEM=""
+XRAY_VERSION="26.1.13"
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -339,10 +340,17 @@ resolve_host_ready() {
   return 1
 }
 
+parse_bool() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|y|Y|on|ON|On) echo "true" ;;
+    *) echo "false" ;;
+  esac
+}
+
 install_packages() {
   local need_install=0
   if [[ "$OS_FAMILY" == "debian" ]]; then
-    for cmd in python3 pip3 curl jq git unzip; do
+    for cmd in python3 pip3 curl jq git unzip openssl; do
       if ! command_exists "$cmd"; then
         need_install=1
         break
@@ -352,9 +360,9 @@ install_packages() {
       return 0
     fi
     apt update
-    run_with_timeout 900 apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate git
+    run_with_timeout 900 apt install -y python3 python3-venv python3-pip curl jq uuid-runtime ca-certificates dnsutils tar unzip logrotate git openssl
   else
-    for cmd in python3 pip3 curl jq git unzip gcc; do
+    for cmd in python3 pip3 curl jq git unzip gcc openssl; do
       if ! command_exists "$cmd"; then
         need_install=1
         break
@@ -363,7 +371,7 @@ install_packages() {
     if [[ $need_install -eq 0 ]]; then
       return 0
     fi
-    run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers git
+    run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers git openssl
   fi
 }
 
@@ -433,6 +441,7 @@ load_noninteractive_env() {
   XRAY_API_PORT="${XRAY_API_PORT:-10085}"
   AGENT_LISTEN_HOST="${AGENT_LISTEN_HOST:-0.0.0.0}"
   AGENT_LISTEN_PORT="${AGENT_LISTEN_PORT:-8787}"
+  AGENT_TLS_ENABLED="$(parse_bool "${AGENT_TLS_ENABLED:-true}")"
   ALLOWED_SOURCES_RAW="${ALLOWED_SOURCES:-}"
   if [[ -z "$ALLOWED_SOURCES_RAW" ]]; then
     ALLOWED_SOURCES_RAW="$(detect_ssh_client_ip || true)"
@@ -544,31 +553,26 @@ map_xray_arch() {
 }
 
 download_xray_release_zip() {
-  local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.48"
-  latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
-
-  if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$latest_url" -o "$output_zip"; then
-    return 0
-  fi
-
-  resolved_url="$(curl -A "$ua" -sS -L -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest || true)"
-  tag="${resolved_url##*/tag/}"
-  tag="${tag%%[/?#]*}"
-  if [[ -n "$tag" && "$tag" != "$resolved_url" ]]; then
-    tagged_url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
-    if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$tagged_url" -o "$output_zip"; then
-      return 0
+  local arch="$1" output_zip="$2" asset_name release_json download_url digest digest_url digest_file actual
+  asset_name="Xray-linux-${arch}.zip"
+  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.55' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
+  download_url="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
+  digest="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')"
+  if [[ -z "$digest" ]]; then
+    digest_url="$(printf '%s' "$release_json" | jq -r --arg name "${asset_name}.dgst" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
+    if [[ -n "$digest_url" ]]; then
+      digest_file="$(mktemp)"
+      curl -fsSL "$digest_url" -o "$digest_file"
+      digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
+      rm -f "$digest_file"
     fi
   fi
-
-  echo "ERROR: failed to download Xray release archive from GitHub." >&2
-  echo "Tried: $latest_url" >&2
-  if [[ -n "${tag:-}" && "$tag" != "$resolved_url" ]]; then
-    echo "Tried: $tagged_url" >&2
+  [[ -n "$download_url" ]] || { echo 'ERROR: failed to resolve Xray asset URL.' >&2; return 1; }
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$download_url" -o "$output_zip"
+  if [[ -n "$digest" ]]; then
+    actual="$(sha256sum "$output_zip" | awk '{print $1}')"
+    [[ "$actual" == "$digest" ]] || { echo 'ERROR: Xray checksum verification failed.' >&2; return 1; }
   fi
-  echo "GitHub may be temporarily blocked or rate-limited from this server." >&2
-  return 1
 }
 
 install_xray_alpine() {
@@ -614,15 +618,34 @@ install_xray() {
     return 0
   fi
   echo "Installing Xray..."
-  if [[ "$OS_FAMILY" == "debian" ]]; then
-    run_with_timeout 900 bash -c "$(curl -L --connect-timeout 15 --max-time 120 https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
-  else
-    install_xray_alpine
-  fi
+  install_xray_alpine
 }
 
 prepare_dirs() {
-  mkdir -p "$APP_APP_DIR" "$APP_DATA_DIR" "$APP_LOG_DIR" "$APP_BACKUP_DIR"
+  mkdir -p "$APP_APP_DIR" "$APP_DATA_DIR" "$APP_LOG_DIR" "$APP_BACKUP_DIR" "$APP_DIR/tls"
+}
+
+write_tls_material() {
+  local cert_path="$APP_DIR/tls/agent.crt" key_path="$APP_DIR/tls/agent.key" san_entries subject_cn actual_host
+  actual_host="${PUBLIC_HOST:-localhost}"
+  if [[ -f "$cert_path" && -f "$key_path" ]]; then
+    AGENT_TLS_CERT_PATH="$cert_path"
+    AGENT_TLS_KEY_PATH="$key_path"
+    AGENT_TLS_FINGERPRINT="$(openssl x509 -in "$cert_path" -noout -fingerprint -sha256 | awk -F= '{print tolower($2)}' | tr -d ':')"
+    return 0
+  fi
+  if [[ "$HOST_MODE" == "ip" ]]; then
+    san_entries="IP:${actual_host},IP:127.0.0.1,DNS:localhost"
+    subject_cn="${actual_host}"
+  else
+    san_entries="DNS:${actual_host},DNS:localhost,IP:127.0.0.1"
+    subject_cn="${actual_host}"
+  fi
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825     -keyout "$key_path"     -out "$cert_path"     -subj "/CN=${subject_cn}"     -addext "subjectAltName=${san_entries}" >/dev/null 2>&1
+  chmod 600 "$key_path" "$cert_path"
+  AGENT_TLS_CERT_PATH="$cert_path"
+  AGENT_TLS_KEY_PATH="$key_path"
+  AGENT_TLS_FINGERPRINT="$(openssl x509 -in "$cert_path" -noout -fingerprint -sha256 | awk -F= '{print tolower($2)}' | tr -d ':')"
 }
 
 copy_code() {
@@ -630,38 +653,48 @@ copy_code() {
 }
 
 write_config() {
-  cat > "$APP_DATA_DIR/config.json" <<JSON
-{
-  "agent_name": "$AGENT_NAME",
-  "agent_token": "$AGENT_TOKEN",
-  "allowed_sources": "$ALLOWED_SOURCES",
-  "agent_listen_host": "$AGENT_LISTEN_HOST",
-  "agent_listen_port": $AGENT_LISTEN_PORT,
-  "public_host": "$PUBLIC_HOST",
-  "host_mode": "$HOST_MODE",
-  "xray_port": $XRAY_PORT,
-  "simple_port": $XRAY_PORT,
-  "reality_port": $REALITY_PORT,
-  "xray_api_port": $XRAY_API_PORT,
-  "xray_config_path": "$XRAY_CONFIG_PATH",
-  "transport_mode": "$TRANSPORT_MODE",
-  "ws_path": "$WS_PATH",
-  "reality_server_name": "$REALITY_SERVER_NAME",
-  "reality_dest": "$REALITY_DEST",
-  "reality_public_key": "",
-  "reality_private_key": "",
-  "reality_short_id": "",
-  "fingerprint": "$FINGERPRINT",
-  "log_path": "$APP_LOG_DIR/agent.log",
-  "backup_dir": "$APP_BACKUP_DIR",
-  "xray_access_log": "/var/log/xray/access.log",
-  "xray_error_log": "/var/log/xray/error.log",
-  "rate_limit_window_seconds": 60,
-  "rate_limit_max_requests": 120,
-  "package_version": "$APP_VERSION"
+  export APP_DATA_DIR APP_LOG_DIR APP_BACKUP_DIR AGENT_NAME AGENT_TOKEN ALLOWED_SOURCES AGENT_LISTEN_HOST AGENT_LISTEN_PORT PUBLIC_HOST HOST_MODE XRAY_PORT REALITY_PORT XRAY_API_PORT XRAY_CONFIG_PATH TRANSPORT_MODE WS_PATH REALITY_SERVER_NAME REALITY_DEST FINGERPRINT APP_VERSION AGENT_TLS_ENABLED AGENT_TLS_CERT_PATH AGENT_TLS_KEY_PATH AGENT_TLS_FINGERPRINT
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+cfg = {
+    'agent_name': os.environ['AGENT_NAME'],
+    'agent_token': os.environ['AGENT_TOKEN'],
+    'allowed_sources': os.environ['ALLOWED_SOURCES'],
+    'agent_listen_host': os.environ['AGENT_LISTEN_HOST'],
+    'agent_listen_port': int(os.environ['AGENT_LISTEN_PORT']),
+    'public_host': os.environ['PUBLIC_HOST'],
+    'host_mode': os.environ['HOST_MODE'],
+    'xray_port': int(os.environ['XRAY_PORT']),
+    'simple_port': int(os.environ['XRAY_PORT']),
+    'reality_port': int(os.environ['REALITY_PORT']),
+    'xray_api_port': int(os.environ['XRAY_API_PORT']),
+    'xray_config_path': os.environ['XRAY_CONFIG_PATH'],
+    'transport_mode': os.environ['TRANSPORT_MODE'],
+    'ws_path': os.environ['WS_PATH'],
+    'reality_server_name': os.environ['REALITY_SERVER_NAME'],
+    'reality_dest': os.environ['REALITY_DEST'],
+    'reality_public_key': '',
+    'reality_private_key': '',
+    'reality_short_id': '',
+    'fingerprint': os.environ['FINGERPRINT'],
+    'log_path': os.path.join(os.environ['APP_LOG_DIR'], 'agent.log'),
+    'backup_dir': os.environ['APP_BACKUP_DIR'],
+    'xray_access_log': '/var/log/xray/access.log',
+    'xray_error_log': '/var/log/xray/error.log',
+    'rate_limit_window_seconds': 60,
+    'rate_limit_max_requests': 120,
+    'package_version': os.environ['APP_VERSION'],
+    'agent_tls_enabled': os.environ.get('AGENT_TLS_ENABLED', 'false').lower() == 'true',
+    'agent_tls_cert_path': os.environ.get('AGENT_TLS_CERT_PATH', ''),
+    'agent_tls_key_path': os.environ.get('AGENT_TLS_KEY_PATH', ''),
+    'agent_tls_fingerprint': os.environ.get('AGENT_TLS_FINGERPRINT', ''),
 }
-JSON
-  chmod 600 "$APP_DATA_DIR/config.json"
+path = Path(os.environ['APP_DATA_DIR']) / 'config.json'
+path.write_text(json.dumps(cfg, indent=2), encoding='utf-8')
+path.chmod(0o600)
+PY
 }
 
 setup_venv() {
@@ -723,7 +756,7 @@ User=root
 Group=root
 WorkingDirectory=$APP_APP_DIR
 Environment=SAHAR_CONFIG=$APP_DATA_DIR/config.json
-ExecStart=$VENV_DIR/bin/gunicorn -w 2 -k gthread --threads 4 --bind ${AGENT_LISTEN_HOST}:${AGENT_LISTEN_PORT} agent_api:APP
+ExecStart=$VENV_DIR/bin/gunicorn -w 2 -k gthread --threads 4 --certfile $APP_DIR/tls/agent.crt --keyfile $APP_DIR/tls/agent.key --bind ${AGENT_LISTEN_HOST}:${AGENT_LISTEN_PORT} agent_api:APP
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
@@ -741,7 +774,7 @@ SERVICE
 name="${API_SERVICE_NAME}"
 description="Sahar Agent API"
 command="${VENV_DIR}/bin/gunicorn"
-command_args="-w 2 -k gthread --threads 4 --bind ${AGENT_LISTEN_HOST}:${AGENT_LISTEN_PORT} agent_api:APP"
+command_args="-w 2 -k gthread --threads 4 --certfile $APP_DIR/tls/agent.crt --keyfile $APP_DIR/tls/agent.key --bind ${AGENT_LISTEN_HOST}:${AGENT_LISTEN_PORT} agent_api:APP"
 directory="${APP_APP_DIR}"
 pidfile="/run/${API_SERVICE_NAME}.pid"
 command_background=true
@@ -789,8 +822,9 @@ print_done() {
     echo "Logs: tail -f $APP_LOG_DIR/*.log"
   fi
   echo
-  echo "Agent API URL: http://${PUBLIC_HOST}:${AGENT_LISTEN_PORT}"
-  echo "Agent token: ${AGENT_TOKEN}"
+  echo "Agent API URL: https://${PUBLIC_HOST}:${AGENT_LISTEN_PORT}"
+  echo "Agent TLS fingerprint: ${AGENT_TLS_FINGERPRINT}"
+  echo "Agent credentials saved in: $APP_DATA_DIR/config.json"
 }
 
 
@@ -805,6 +839,7 @@ main() {
   run_step "Installing Xray components" install_xray
   run_step "Creating directories" prepare_dirs
   run_step "Copying application files" copy_code
+  run_step "Generating TLS certificate" write_tls_material
   run_step "Writing configuration" write_config
   run_step "Building Python environment" setup_venv
   run_step "Writing service files" write_service

@@ -32,6 +32,7 @@ class Database:
                     name TEXT NOT NULL UNIQUE,
                     api_url TEXT NOT NULL,
                     api_token TEXT NOT NULL,
+                    api_tls_fingerprint TEXT DEFAULT '',
                     public_host TEXT DEFAULT '',
                     host_mode TEXT DEFAULT '',
                     xray_port INTEGER DEFAULT 0,
@@ -213,6 +214,7 @@ class Database:
             self._ensure_column(conn, 'servers', 'last_health_message', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'last_health_at', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'fingerprint', "TEXT DEFAULT 'chrome'")
+            self._ensure_column(conn, 'servers', 'api_tls_fingerprint', "TEXT DEFAULT ''")
             self._ensure_column(conn, 'servers', 'reality_port', 'INTEGER DEFAULT 0')
             self._ensure_column(conn, 'servers', 'cpu_percent', 'REAL DEFAULT 0')
             self._ensure_column(conn, 'servers', 'memory_percent', 'REAL DEFAULT 0')
@@ -466,7 +468,7 @@ class Database:
             conn.execute(
                 '''
                 INSERT INTO servers (
-                    name, api_url, api_token, public_host, host_mode, xray_port,
+                    name, api_url, api_token, api_tls_fingerprint, public_host, host_mode, xray_port,
                     transport_mode, ws_path, reality_server_name, reality_public_key,
                     reality_short_id, fingerprint, reality_port, enabled, last_health_status,
                     last_health_message, last_health_at, cpu_percent, memory_percent,
@@ -477,6 +479,7 @@ class Database:
                 ON CONFLICT(name) DO UPDATE SET
                     api_url=excluded.api_url,
                     api_token=excluded.api_token,
+                    api_tls_fingerprint=excluded.api_tls_fingerprint,
                     public_host=excluded.public_host,
                     host_mode=excluded.host_mode,
                     xray_port=excluded.xray_port,
@@ -513,6 +516,7 @@ class Database:
                     server['name'],
                     server.get('api_url', ''),
                     server.get('api_token', ''),
+                    server.get('api_tls_fingerprint', ''),
                     server.get('public_host', ''),
                     server.get('host_mode', ''),
                     int(server.get('xray_port') or 0),
@@ -808,7 +812,7 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 '''
-                SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.public_host, s.host_mode,
+                SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.api_tls_fingerprint, s.public_host, s.host_mode,
                        s.xray_port, s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                        s.reality_short_id, s.fingerprint, s.reality_port, s.cf_dns_name, s.cf_tunnel_id, s.cf_tunnel_name, s.cf_tunnel_status
                 FROM users u
@@ -954,7 +958,7 @@ class Database:
 
     def _users_with_server(self, where_clause: str, params: Iterable[Any]) -> List[Dict[str, Any]]:
         sql = f'''
-            SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.public_host, s.host_mode,
+            SELECT u.*, s.name AS server_name, s.api_url, s.api_token, s.api_tls_fingerprint, s.public_host, s.host_mode,
                    s.xray_port, s.transport_mode, s.ws_path, s.reality_server_name, s.reality_public_key,
                    s.reality_short_id, s.fingerprint, s.reality_port
             FROM users u

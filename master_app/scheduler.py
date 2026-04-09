@@ -53,7 +53,7 @@ WARN_USAGE_SCHEDULE = _parse_int_schedule(CONFIG.get('warn_usage_schedule', '80,
 
 
 def server_client(server):
-    return AgentClient(server['api_url'], server['api_token'], timeout=AGENT_TIMEOUT)
+    return AgentClient(server['api_url'], server['api_token'], timeout=AGENT_TIMEOUT, tls_fingerprint=server.get('api_tls_fingerprint', ''))
 
 
 def accessible_servers_for_user(user: dict) -> list[dict]:

@@ -1,12 +1,4 @@
-# سحر 0.1.52
-
-## Changes in 0.1.52
-- Added automatic server down/recovery alerts for admins from the scheduler.
-- Added periodic Cloudflare auto-sync for DNS/Tunnel records with configurable interval.
-- Added raw subscription URL and one-tap subscription token rotation inside Telegram.
-- Added a built-in `/doctor` operational diagnostics view.
-- Expanded the server page with profiles, DNS refresh, Xray status, and log actions.
-- Surface richer Cloudflare metadata directly on each server detail page.
+# سحر 0.1.55
 
 
 ![Sahar banner](assets/banner.png)
@@ -14,7 +6,7 @@
 **سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.52-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.55-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)
@@ -59,7 +51,6 @@
 - `agent_app/` کدهای Agent
 - `assets/` فایل‌های تصویری README
 - `VERSION` نسخه بسته
-- `PATCH_NOTES.txt` یادداشت تغییرات
 
 ---
 

@@ -12,11 +12,28 @@ class AgentError(Exception):
     pass
 
 
+class FingerprintAdapter(HTTPAdapter):
+    def __init__(self, fingerprint: str, *args, **kwargs):
+        self.fingerprint = ''.join(ch for ch in str(fingerprint or '') if ch.isalnum()).lower()
+        if not self.fingerprint:
+            raise ValueError('tls fingerprint is required for FingerprintAdapter')
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs['assert_fingerprint'] = self.fingerprint
+        return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        proxy_kwargs['assert_fingerprint'] = self.fingerprint
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+
 @dataclass
 class AgentClient:
     base_url: str
     token: str
     timeout: int = 15
+    tls_fingerprint: str = ''
     session: requests.Session = field(default_factory=requests.Session)
 
     def __post_init__(self):
@@ -29,9 +46,13 @@ class AgentClient:
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=['GET', 'POST'],
         )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
-        self.session.mount('http://', adapter)
-        self.session.mount('https://', adapter)
+        http_adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        self.session.mount('http://', http_adapter)
+        if self.base_url.startswith('https://') and self.tls_fingerprint:
+            https_adapter = FingerprintAdapter(self.tls_fingerprint, max_retries=retry, pool_connections=10, pool_maxsize=10)
+        else:
+            https_adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        self.session.mount('https://', https_adapter)
         self.session.headers.update({'X-Agent-Token': self.token})
 
     def _handle_response(self, resp: requests.Response) -> Dict[str, Any]:

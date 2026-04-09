@@ -72,7 +72,7 @@ class BackupManager:
         for server in servers:
             server_dir = agents_dir / server['name']
             server_dir.mkdir(parents=True, exist_ok=True)
-            client = AgentClient(server['api_url'], server['api_token'], timeout=int(self.config.get('agent_timeout_seconds', 15)))
+            client = AgentClient(server['api_url'], server['api_token'], timeout=int(self.config.get('agent_timeout_seconds', 15)), tls_fingerprint=server.get('api_tls_fingerprint', ''))
             try:
                 meta = client.create_backup()['data']
                 filename = meta['filename']

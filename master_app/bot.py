@@ -335,7 +335,7 @@ def status_text() -> str:
 
 
 def server_client(server: Dict[str, Any]) -> AgentClient:
-    return AgentClient(server['api_url'], server['api_token'], timeout=AGENT_TIMEOUT)
+    return AgentClient(server['api_url'], server['api_token'], timeout=AGENT_TIMEOUT, tls_fingerprint=server.get('api_tls_fingerprint', ''))
 
 
 def refresh_server_metadata(server_name: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -348,6 +348,7 @@ def refresh_server_metadata(server_name: str) -> Tuple[Dict[str, Any], Dict[str,
         'name': server['name'],
         'api_url': server['api_url'],
         'api_token': server['api_token'],
+        'api_tls_fingerprint': server.get('api_tls_fingerprint', ''),
         'public_host': health.get('public_host') or server.get('public_host') or '',
         'host_mode': health.get('host_mode') or server.get('host_mode') or '',
         'xray_port': int(health.get('simple_port') or health.get('xray_port') or server.get('xray_port') or 0),
@@ -357,6 +358,7 @@ def refresh_server_metadata(server_name: str) -> Tuple[Dict[str, Any], Dict[str,
         'reality_public_key': health.get('reality_public_key') or server.get('reality_public_key') or '',
         'reality_short_id': health.get('reality_short_id') or server.get('reality_short_id') or '',
         'fingerprint': health.get('fingerprint') or server.get('fingerprint') or 'chrome',
+        'api_tls_fingerprint': health.get('tls_fingerprint') or server.get('api_tls_fingerprint', ''),
         'reality_port': int(health.get('reality_port') or server.get('reality_port') or 0),
         'enabled': bool(server.get('enabled', 1)),
         'last_health_status': 'ok',
@@ -676,7 +678,8 @@ def do_add_server_via_ssh(name: str, host: str, ssh_port: int, ssh_username: str
             except Exception:
                 LOGGER.exception('cloudflare_tunnel_cleanup_failed server=%s', name)
         raise
-    result = do_add_server(name, api_url, api_token)
+    api_tls_fingerprint = _health.get('api_tls_fingerprint', '')
+    result = do_add_server(name, api_url, api_token, api_tls_fingerprint)
     server = DB.get_server(name)
     if server:
         try:
@@ -1329,7 +1332,7 @@ async def add_server_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 
-def do_add_server(name: str, api_url: str, api_token: str) -> str:
+def do_add_server(name: str, api_url: str, api_token: str, api_tls_fingerprint: str = '') -> str:
     if not valid_server_name(name):
         return '❌ نام سرور نامعتبر است.'
     created_at = now_iso()
@@ -1339,6 +1342,7 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
             'name': name,
             'api_url': api_url,
             'api_token': api_token,
+            'api_tls_fingerprint': api_tls_fingerprint or existing.get('api_tls_fingerprint', ''),
             'public_host': existing.get('public_host', ''),
             'host_mode': existing.get('host_mode', ''),
             'xray_port': int(existing.get('xray_port') or 0),
@@ -1366,13 +1370,14 @@ def do_add_server(name: str, api_url: str, api_token: str) -> str:
         }
     )
     try:
-        client = AgentClient(api_url, api_token, timeout=AGENT_TIMEOUT)
+        client = AgentClient(api_url, api_token, timeout=AGENT_TIMEOUT, tls_fingerprint=api_tls_fingerprint or existing.get('api_tls_fingerprint', ''))
         health = client.health()['data']
         DB.add_or_update_server(
             {
                 'name': name,
                 'api_url': api_url,
                 'api_token': api_token,
+                'api_tls_fingerprint': api_tls_fingerprint or existing.get('api_tls_fingerprint', ''),
                 'public_host': health.get('public_host', existing.get('public_host', '')),
                 'host_mode': health.get('host_mode', existing.get('host_mode', '')),
                 'xray_port': int(health.get('simple_port') or health.get('xray_port') or existing.get('xray_port') or 0),

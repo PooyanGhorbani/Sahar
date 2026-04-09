@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from utils import detect_service_manager
@@ -14,32 +16,52 @@ SERVICE_NAME = 'sahar-cloudflared'
 BINARY_PATH = '/usr/local/bin/cloudflared'
 SYSTEMD_SERVICE_PATH = Path(f'/etc/systemd/system/{SERVICE_NAME}.service')
 OPENRC_SERVICE_PATH = Path(f'/etc/init.d/{SERVICE_NAME}')
-TOKEN_RE = re.compile(r'--token\s+([^"\s]+)')
+ENV_DIR = Path('/etc/sahar')
+TOKEN_ENV_PATH = ENV_DIR / 'cloudflared.env'
+WRAPPER_PATH = Path('/usr/local/libexec/sahar-cloudflared.sh')
+CLOUDFLARED_VERSION = '2026.2.0'
 
 
 class CloudflaredRuntimeError(RuntimeError):
     pass
 
 
-def _download_url(machine: str) -> str:
+def _asset_name(machine: str) -> str:
     machine = (machine or '').strip().lower()
     mapping = {
-        'x86_64': 'amd64',
-        'amd64': 'amd64',
-        'x64': 'amd64',
-        'i386': '386',
-        'i686': '386',
-        'aarch64': 'arm64',
-        'arm64': 'arm64',
-        'armv8': 'arm64',
-        'armv7l': 'arm',
-        'armv6l': 'arm',
-        'arm': 'arm',
+        'x86_64': 'cloudflared-linux-amd64',
+        'amd64': 'cloudflared-linux-amd64',
+        'x64': 'cloudflared-linux-amd64',
+        'i386': 'cloudflared-linux-386',
+        'i686': 'cloudflared-linux-386',
+        'aarch64': 'cloudflared-linux-arm64',
+        'arm64': 'cloudflared-linux-arm64',
+        'armv8': 'cloudflared-linux-arm64',
+        'armv7l': 'cloudflared-linux-arm',
+        'armv6l': 'cloudflared-linux-arm',
+        'arm': 'cloudflared-linux-arm',
     }
-    suffix = mapping.get(machine)
-    if not suffix:
+    asset = mapping.get(machine)
+    if not asset:
         raise CloudflaredRuntimeError(f'unsupported architecture for cloudflared: {machine}')
-    return f'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{suffix}'
+    return asset
+
+
+def _release_asset_metadata(asset_name: str) -> tuple[str, str]:
+    url = f'https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}'
+    req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Sahar/0.1.55'})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.load(resp)
+    for asset in data.get('assets', []):
+        if asset.get('name') != asset_name:
+            continue
+        digest = str(asset.get('digest') or '')
+        digest = digest.split(':', 1)[-1].strip() if digest else ''
+        download_url = asset.get('browser_download_url') or ''
+        if not download_url:
+            break
+        return download_url, digest
+    raise CloudflaredRuntimeError(f'could not resolve cloudflared asset metadata for {asset_name}')
 
 
 def install_binary(dest_path: str = BINARY_PATH) -> str:
@@ -48,11 +70,18 @@ def install_binary(dest_path: str = BINARY_PATH) -> str:
     if dest.exists() and os.access(dest, os.X_OK):
         return str(dest)
     machine = subprocess.check_output(['uname', '-m'], text=True).strip()
-    url = _download_url(machine)
+    asset_name = _asset_name(machine)
+    url, digest = _release_asset_metadata(asset_name)
     fd, tmp_path = tempfile.mkstemp(prefix='cloudflared-', suffix='.bin')
     os.close(fd)
     try:
-        subprocess.check_call(['curl', '-fsSL', url, '-o', tmp_path])
+        req = urllib.request.Request(url, headers={'User-Agent': 'Sahar/0.1.55'})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, 'wb') as fh:
+            shutil.copyfileobj(resp, fh)
+        if digest:
+            actual = hashlib.sha256(Path(tmp_path).read_bytes()).hexdigest()
+            if actual.lower() != digest.lower():
+                raise CloudflaredRuntimeError('cloudflared checksum verification failed')
         current_mode = os.stat(tmp_path).st_mode
         os.chmod(tmp_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         shutil.move(tmp_path, dest)
@@ -64,32 +93,50 @@ def install_binary(dest_path: str = BINARY_PATH) -> str:
     return str(dest)
 
 
-def _extract_token(path: Path) -> str:
+def _read_env_token() -> str:
     try:
-        text = path.read_text(encoding='utf-8')
+        for line in TOKEN_ENV_PATH.read_text(encoding='utf-8').splitlines():
+            if line.startswith('TUNNEL_TOKEN='):
+                return line.split('=', 1)[1].strip().strip("'\"")
     except FileNotFoundError:
         return ''
-    match = TOKEN_RE.search(text)
-    return match.group(1) if match else ''
+    return ''
 
 
 def current_configured_token(manager: str) -> str:
-    if manager == 'systemd':
-        return _extract_token(SYSTEMD_SERVICE_PATH)
-    if manager == 'openrc':
-        return _extract_token(OPENRC_SERVICE_PATH)
-    return ''
+    if manager not in {'systemd', 'openrc'}:
+        return ''
+    return _read_env_token()
 
 
 def service_is_installed(manager: str) -> bool:
     if manager == 'systemd':
-        return SYSTEMD_SERVICE_PATH.exists()
+        return SYSTEMD_SERVICE_PATH.exists() and TOKEN_ENV_PATH.exists()
     if manager == 'openrc':
-        return OPENRC_SERVICE_PATH.exists()
+        return OPENRC_SERVICE_PATH.exists() and TOKEN_ENV_PATH.exists()
     return False
 
 
+def _write_wrapper_and_env(token: str) -> None:
+    ENV_DIR.mkdir(parents=True, exist_ok=True)
+    TOKEN_ENV_PATH.write_text(f"TUNNEL_TOKEN='{token}'\n", encoding='utf-8')
+    TOKEN_ENV_PATH.chmod(0o600)
+    WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WRAPPER_PATH.write_text(
+        '\n'.join([
+            '#!/bin/sh',
+            'set -eu',
+            f'. {TOKEN_ENV_PATH}',
+            f'exec {BINARY_PATH} tunnel --no-autoupdate run --token "$TUNNEL_TOKEN"',
+            '',
+        ]),
+        encoding='utf-8',
+    )
+    WRAPPER_PATH.chmod(0o700)
+
+
 def _write_systemd_service(token: str) -> None:
+    _write_wrapper_and_env(token)
     SYSTEMD_SERVICE_PATH.write_text(
         '\n'.join([
             '[Unit]',
@@ -99,7 +146,7 @@ def _write_systemd_service(token: str) -> None:
             '',
             '[Service]',
             'Type=simple',
-            f'ExecStart={BINARY_PATH} tunnel --no-autoupdate run --token {token}',
+            f'ExecStart={WRAPPER_PATH}',
             'Restart=always',
             'RestartSec=5',
             '',
@@ -118,12 +165,12 @@ def _write_systemd_service(token: str) -> None:
 
 
 def _write_openrc_service(token: str) -> None:
+    _write_wrapper_and_env(token)
     OPENRC_SERVICE_PATH.write_text(
         '\n'.join([
             '#!/sbin/openrc-run',
             f'name="{SERVICE_NAME}"',
-            f'command="{BINARY_PATH}"',
-            f'command_args="tunnel --no-autoupdate run --token {token}"',
+            f'command="{WRAPPER_PATH}"',
             'command_background=true',
             f'pidfile="/run/{SERVICE_NAME}.pid"',
             'output_log="/var/log/sahar-cloudflared.log"',

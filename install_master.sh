@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.52"
+APP_VERSION="0.1.55"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -49,6 +49,7 @@ OS_VERSION_ID=""
 OS_PRETTY_NAME=""
 OS_FAMILY=""
 INIT_SYSTEM=""
+XRAY_VERSION="26.1.13"
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -351,7 +352,7 @@ resolve_host_ready() {
 install_packages() {
   local need_install=0
   if [[ "$OS_FAMILY" == "debian" ]]; then
-    for cmd in python3 pip3 sqlite3 curl tar unzip jq git; do
+    for cmd in python3 pip3 sqlite3 curl tar unzip jq git openssl; do
       if ! command_exists "$cmd"; then
         need_install=1
         break
@@ -361,9 +362,9 @@ install_packages() {
       return 0
     fi
     run_with_timeout 300 apt update
-    run_with_timeout 900 apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git
+    run_with_timeout 900 apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git openssl
   else
-    for cmd in python3 pip3 curl unzip jq git gcc; do
+    for cmd in python3 pip3 curl unzip jq git gcc openssl; do
       if ! command_exists "$cmd"; then
         need_install=1
         break
@@ -372,7 +373,7 @@ install_packages() {
     if [[ $need_install -eq 0 ]]; then
       return 0
     fi
-    run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git
+    run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git openssl
   fi
 }
 
@@ -609,79 +610,91 @@ copy_code() {
 }
 
 write_config() {
-  cat > "$APP_DATA_DIR/config.json" <<JSON
-{
-  "bot_token": "$BOT_TOKEN",
-  "admin_chat_ids": "",
-  "database_path": "$APP_DATA_DIR/master.db",
-  "log_path": "$APP_LOG_DIR/master.log",
-  "qr_dir": "$APP_QR_DIR",
-  "backup_dir": "$APP_BACKUP_DIR",
-  "scheduler_interval_seconds": $SCHEDULER_INTERVAL,
-  "agent_timeout_seconds": $AGENT_TIMEOUT,
-  "warn_days_left": $WARN_DAYS_LEFT,
-  "warn_usage_percent": $WARN_USAGE_PERCENT,
-  "backup_interval_hours": $BACKUP_INTERVAL_HOURS,
-  "backup_retention": $BACKUP_RETENTION,
-  "quick_snapshot_retention": 20,
-  "warn_days_schedule": "7,3,1",
-  "warn_usage_schedule": "80,95",
-  "package_version": "$APP_VERSION",
-  "cloudflare_enabled": $CLOUDFLARE_ENABLED,
-  "cloudflare_domain_name": "$CLOUDFLARE_DOMAIN_NAME",
-  "cloudflare_zone_name": "$CLOUDFLARE_DOMAIN_NAME",
-  "cloudflare_base_subdomain": "$CLOUDFLARE_BASE_SUBDOMAIN",
-  "cloudflare_token_encryption_key": "$CLOUDFLARE_TOKEN_ENCRYPTION_KEY",
-  "cloudflare_dns_proxied": false,
-  "cloudflare_tunnel_enabled": false,
-  "cloudflare_auto_sync_enabled": true,
-  "cloudflare_auto_sync_interval_minutes": 30,
-  "notify_on_server_status_change": true,
-  "subscription_base_url": "$SUBSCRIPTION_BASE_URL",
-  "subscription_bind_host": "$SUBSCRIPTION_BIND_HOST",
-  "subscription_bind_port": $SUBSCRIPTION_BIND_PORT,
-  "local_node_enabled": $LOCAL_NODE_ENABLED,
-  "local_server_name": "$LOCAL_SERVER_NAME",
-  "local_agent_api_url": "$LOCAL_AGENT_API_URL",
-  "local_agent_api_token": "$LOCAL_AGENT_API_TOKEN"
+  export APP_DATA_DIR APP_LOG_DIR APP_QR_DIR APP_BACKUP_DIR APP_VERSION BOT_TOKEN SCHEDULER_INTERVAL AGENT_TIMEOUT WARN_DAYS_LEFT WARN_USAGE_PERCENT BACKUP_INTERVAL_HOURS BACKUP_RETENTION CLOUDFLARE_ENABLED CLOUDFLARE_DOMAIN_NAME CLOUDFLARE_BASE_SUBDOMAIN CLOUDFLARE_TOKEN_ENCRYPTION_KEY SUBSCRIPTION_BASE_URL SUBSCRIPTION_BIND_HOST SUBSCRIPTION_BIND_PORT LOCAL_NODE_ENABLED LOCAL_SERVER_NAME LOCAL_AGENT_API_URL LOCAL_AGENT_API_TOKEN
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+cfg = {
+    'bot_token': os.environ.get('BOT_TOKEN', ''),
+    'admin_chat_ids': '',
+    'database_path': os.path.join(os.environ['APP_DATA_DIR'], 'master.db'),
+    'log_path': os.path.join(os.environ['APP_LOG_DIR'], 'master.log'),
+    'qr_dir': os.environ['APP_QR_DIR'],
+    'backup_dir': os.environ['APP_BACKUP_DIR'],
+    'scheduler_interval_seconds': int(os.environ['SCHEDULER_INTERVAL']),
+    'agent_timeout_seconds': int(os.environ['AGENT_TIMEOUT']),
+    'warn_days_left': int(os.environ['WARN_DAYS_LEFT']),
+    'warn_usage_percent': int(os.environ['WARN_USAGE_PERCENT']),
+    'backup_interval_hours': int(os.environ['BACKUP_INTERVAL_HOURS']),
+    'backup_retention': int(os.environ['BACKUP_RETENTION']),
+    'quick_snapshot_retention': 20,
+    'warn_days_schedule': '7,3,1',
+    'warn_usage_schedule': '80,95',
+    'package_version': os.environ['APP_VERSION'],
+    'cloudflare_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true',
+    'cloudflare_domain_name': os.environ.get('CLOUDFLARE_DOMAIN_NAME', ''),
+    'cloudflare_zone_name': os.environ.get('CLOUDFLARE_DOMAIN_NAME', ''),
+    'cloudflare_base_subdomain': os.environ.get('CLOUDFLARE_BASE_SUBDOMAIN', ''),
+    'cloudflare_token_encryption_key': os.environ.get('CLOUDFLARE_TOKEN_ENCRYPTION_KEY', ''),
+    'cloudflare_dns_proxied': False,
+    'cloudflare_tunnel_enabled': False,
+    'cloudflare_auto_sync_enabled': True,
+    'cloudflare_auto_sync_interval_minutes': 30,
+    'notify_on_server_status_change': True,
+    'subscription_base_url': os.environ.get('SUBSCRIPTION_BASE_URL', ''),
+    'subscription_bind_host': os.environ.get('SUBSCRIPTION_BIND_HOST', '0.0.0.0'),
+    'subscription_bind_port': int(os.environ['SUBSCRIPTION_BIND_PORT']),
+    'local_node_enabled': os.environ.get('LOCAL_NODE_ENABLED', 'false').lower() == 'true',
+    'local_server_name': os.environ.get('LOCAL_SERVER_NAME', 'local'),
+    'local_agent_api_url': os.environ.get('LOCAL_AGENT_API_URL', ''),
+    'local_agent_api_token': os.environ.get('LOCAL_AGENT_API_TOKEN', ''),
 }
-JSON
-  chmod 600 "$APP_DATA_DIR/config.json"
+path = Path(os.environ['APP_DATA_DIR']) / 'config.json'
+path.write_text(json.dumps(cfg, indent=2), encoding='utf-8')
+path.chmod(0o600)
+PY
   persist_bot_token
 
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
     mkdir -p "$APP_BACKUP_DIR/local-agent"
-    cat > "$APP_DATA_DIR/local-agent-config.json" <<JSON
-{
-  "agent_name": "$LOCAL_SERVER_NAME",
-  "agent_token": "$LOCAL_AGENT_API_TOKEN",
-  "allowed_sources": "127.0.0.1/32",
-  "agent_listen_host": "$LOCAL_AGENT_LISTEN_HOST",
-  "agent_listen_port": $LOCAL_AGENT_LISTEN_PORT,
-  "public_host": "$LOCAL_PUBLIC_HOST",
-  "host_mode": "$LOCAL_HOST_MODE",
-  "xray_port": $LOCAL_XRAY_PORT,
-  "simple_port": $LOCAL_XRAY_PORT,
-  "reality_port": $LOCAL_REALITY_PORT,
-  "xray_api_port": $LOCAL_XRAY_API_PORT,
-  "xray_config_path": "$XRAY_CONFIG_PATH",
-  "transport_mode": "$LOCAL_TRANSPORT_MODE",
-  "ws_path": "$LOCAL_WS_PATH",
-  "reality_server_name": "$LOCAL_REALITY_SERVER_NAME",
-  "reality_dest": "$LOCAL_REALITY_DEST",
-  "reality_public_key": "",
-  "reality_private_key": "",
-  "reality_short_id": "",
-  "fingerprint": "$LOCAL_FINGERPRINT",
-  "log_path": "$APP_LOG_DIR/local-agent.log",
-  "backup_dir": "$APP_BACKUP_DIR/local-agent",
-  "xray_access_log": "/var/log/xray/access.log",
-  "xray_error_log": "/var/log/xray/error.log",
-  "rate_limit_window_seconds": 60,
-  "rate_limit_max_requests": 120
+    export XRAY_CONFIG_PATH LOCAL_SERVER_NAME LOCAL_AGENT_API_TOKEN LOCAL_AGENT_LISTEN_HOST LOCAL_AGENT_LISTEN_PORT LOCAL_PUBLIC_HOST LOCAL_HOST_MODE LOCAL_XRAY_PORT LOCAL_REALITY_PORT LOCAL_XRAY_API_PORT LOCAL_TRANSPORT_MODE LOCAL_WS_PATH LOCAL_REALITY_SERVER_NAME LOCAL_REALITY_DEST LOCAL_FINGERPRINT
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+cfg = {
+    'agent_name': os.environ['LOCAL_SERVER_NAME'],
+    'agent_token': os.environ['LOCAL_AGENT_API_TOKEN'],
+    'allowed_sources': '127.0.0.1/32',
+    'agent_listen_host': os.environ['LOCAL_AGENT_LISTEN_HOST'],
+    'agent_listen_port': int(os.environ['LOCAL_AGENT_LISTEN_PORT']),
+    'public_host': os.environ['LOCAL_PUBLIC_HOST'],
+    'host_mode': os.environ['LOCAL_HOST_MODE'],
+    'xray_port': int(os.environ['LOCAL_XRAY_PORT']),
+    'simple_port': int(os.environ['LOCAL_XRAY_PORT']),
+    'reality_port': int(os.environ['LOCAL_REALITY_PORT']),
+    'xray_api_port': int(os.environ['LOCAL_XRAY_API_PORT']),
+    'xray_config_path': os.environ['XRAY_CONFIG_PATH'],
+    'transport_mode': os.environ['LOCAL_TRANSPORT_MODE'],
+    'ws_path': os.environ['LOCAL_WS_PATH'],
+    'reality_server_name': os.environ['LOCAL_REALITY_SERVER_NAME'],
+    'reality_dest': os.environ['LOCAL_REALITY_DEST'],
+    'reality_public_key': '',
+    'reality_private_key': '',
+    'reality_short_id': '',
+    'fingerprint': os.environ['LOCAL_FINGERPRINT'],
+    'log_path': os.path.join(os.environ['APP_LOG_DIR'], 'local-agent.log'),
+    'backup_dir': os.path.join(os.environ['APP_BACKUP_DIR'], 'local-agent'),
+    'xray_access_log': '/var/log/xray/access.log',
+    'xray_error_log': '/var/log/xray/error.log',
+    'rate_limit_window_seconds': 60,
+    'rate_limit_max_requests': 120,
 }
-JSON
-    chmod 600 "$APP_DATA_DIR/local-agent-config.json"
+path = Path(os.environ['APP_DATA_DIR']) / 'local-agent-config.json'
+path.write_text(json.dumps(cfg, indent=2), encoding='utf-8')
+path.chmod(0o600)
+PY
   fi
 }
 
@@ -940,31 +953,26 @@ map_xray_arch() {
 }
 
 download_xray_release_zip() {
-  local arch="$1" output_zip="$2" ua latest_url resolved_url tag tagged_url
-  ua="SaharInstaller/0.1.48"
-  latest_url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
-
-  if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$latest_url" -o "$output_zip"; then
-    return 0
-  fi
-
-  resolved_url="$(curl -A "$ua" -sS -L -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest || true)"
-  tag="${resolved_url##*/tag/}"
-  tag="${tag%%[/?#]*}"
-  if [[ -n "$tag" && "$tag" != "$resolved_url" ]]; then
-    tagged_url="https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip"
-    if curl -A "$ua" --fail --location --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$tagged_url" -o "$output_zip"; then
-      return 0
+  local arch="$1" output_zip="$2" asset_name release_json download_url digest digest_url digest_file actual
+  asset_name="Xray-linux-${arch}.zip"
+  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.55' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
+  download_url="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
+  digest="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')"
+  if [[ -z "$digest" ]]; then
+    digest_url="$(printf '%s' "$release_json" | jq -r --arg name "${asset_name}.dgst" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
+    if [[ -n "$digest_url" ]]; then
+      digest_file="$(mktemp)"
+      curl -fsSL "$digest_url" -o "$digest_file"
+      digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
+      rm -f "$digest_file"
     fi
   fi
-
-  echo "ERROR: failed to download Xray release archive from GitHub." >&2
-  echo "Tried: $latest_url" >&2
-  if [[ -n "${tag:-}" && "$tag" != "$resolved_url" ]]; then
-    echo "Tried: $tagged_url" >&2
+  [[ -n "$download_url" ]] || { echo 'ERROR: failed to resolve Xray asset URL.' >&2; return 1; }
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$download_url" -o "$output_zip"
+  if [[ -n "$digest" ]]; then
+    actual="$(sha256sum "$output_zip" | awk '{print $1}')"
+    [[ "$actual" == "$digest" ]] || { echo 'ERROR: Xray checksum verification failed.' >&2; return 1; }
   fi
-  echo "GitHub may be temporarily blocked or rate-limited from this server." >&2
-  return 1
 }
 
 install_xray_alpine() {
@@ -1011,11 +1019,7 @@ install_xray_if_needed() {
       return 0
     fi
     echo "Installing Xray..."
-    if [[ "$OS_FAMILY" == "debian" ]]; then
-      run_with_timeout 900 bash -c "$(curl -L --connect-timeout 15 --max-time 120 https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root --logrotate 00:00:00
-    else
-      install_xray_alpine
-    fi
+    install_xray_alpine
   fi
 }
 

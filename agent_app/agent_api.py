@@ -107,6 +107,8 @@ def health():
             'user_count': 0,
             'profiles': [],
             'health_warning': str(exc),
+            'tls_enabled': bool(CONFIG.get('agent_tls_enabled', False)),
+            'tls_fingerprint': CONFIG.get('agent_tls_fingerprint', ''),
         }
     data['server_time'] = now_iso()
     return ok(data)
@@ -129,6 +131,8 @@ def config_summary():
             'allowed_sources': ALLOWED_SOURCES,
             'rate_limit_window_seconds': RATE_LIMIT_WINDOW,
             'rate_limit_max_requests': RATE_LIMIT_MAX,
+            'tls_enabled': bool(CONFIG.get('agent_tls_enabled', False)),
+            'tls_fingerprint': CONFIG.get('agent_tls_fingerprint', ''),
         }
     )
 
