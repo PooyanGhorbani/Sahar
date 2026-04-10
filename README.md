@@ -1,10 +1,10 @@
-# سحر 0.1.59
+# سحر 0.1.61
 
 
 **سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.59-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.61-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)
@@ -45,14 +45,15 @@
 - `install.sh` شروع نصب
 - `install_master.sh` نصب Master
 - `install_agent.sh` نصب Agent
-- `sahar-installer-v0.1.59.sh` نصب تک‌فایلی برای اجرا با `bash <(curl -Ls https://...)`
+- `sahar-installer.sh` نصب تک‌فایلی پایدار برای اجرا مستقیم از GitHub با `bash <(curl -fsSL ...)`
+- `sahar-installer-v0.1.61.sh` نسخه‌ی versioned همان installer برای آرشیو و rollback
 - `master_app/` کدهای Master
 - `agent_app/` کدهای Agent
 - `VERSION` نسخه بسته
 
 ---
 
-## نصب مستقیم از GitHub با یک خط دستور | One-line direct install from GitHub
+## نصب مستقیم از GitHub | Direct install from GitHub
 
 آدرس واقعی پروژه:
 
@@ -60,7 +61,7 @@
 https://github.com/PooyanGhorbani/Sahar
 ```
 
-این دستورها قبل از clone شدن، اگر `git` روی سرور نباشد آن را خودکار نصب می‌کنند.
+برای نصب مستقیم دو راه داری: روش پیشنهادی با installer تک‌فایلی از raw GitHub، و روش clone کامل ریپو. دستورهای clone پایین اگر `git` روی سرور نباشد آن را خودکار نصب می‌کنند.
 
 ### نصب Master از GitHub
 
@@ -94,27 +95,37 @@ sh -c 'set -e; if ! command -v git >/dev/null 2>&1; then if [ -f /etc/alpine-rel
 
 ## نصب تک‌فایلی با curl | Single-file curl installer
 
-اگر بخواهی نصب را فقط با **یک فایل Bash** منتشر کنی، این بسته فایل زیر را هم دارد:
+برای اجرای مستقیم از همین ریپو، فایل پایدار زیر را در ریشه پروژه نگه دار:
 
 ```text
-sahar-installer-v0.1.59.sh
+sahar-installer.sh
 ```
 
-نمونه اجرا برای Master:
+اگر شاخهٔ پیش‌فرض ریپو **main** باشد، دستور نصب مستقیم این است:
+
+### Master
 
 ```bash
-bash <(curl -Ls https://YOUR-DOMAIN/sahar-installer-v0.1.59.sh) master
+bash <(curl -fsSL https://raw.githubusercontent.com/PooyanGhorbani/Sahar/main/sahar-installer.sh) master
 ```
 
-نمونه اجرا برای Agent:
+### Agent
 
 ```bash
-bash <(curl -Ls https://YOUR-DOMAIN/sahar-installer-v0.1.59.sh) agent
+bash <(curl -fsSL https://raw.githubusercontent.com/PooyanGhorbani/Sahar/main/sahar-installer.sh) agent
+```
+
+اگر شاخهٔ پیش‌فرض شما `main` نیست، فقط بخش branch در URL را عوض کن.
+
+فایل versioned هم برای آرشیو داخل پروژه نگه داشته شده است:
+
+```text
+sahar-installer-v0.1.61.sh
 ```
 
 نکته‌ها:
-- این اسکریپت payload پروژه را داخل خودش دارد و آن را در مسیر کاری extract می‌کند.
-- برای استفاده با `curl`, فایل باید روی یک آدرس **HTTPS** عمومی host شده باشد.
+- installer تک‌فایلی payload کامل پروژه را داخل خودش دارد و آن را در مسیر کاری extract می‌کند.
+- برای استفاده با `curl`, فایل باید در ریشهٔ branch موردنظر در GitHub وجود داشته باشد.
 - روی Alpine اگر `bash` نصب نباشد، اول این را بزن:
 
 ```bash

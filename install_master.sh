@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.59"
+APP_VERSION="0.1.61"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -972,26 +972,21 @@ map_xray_arch() {
 }
 
 download_xray_release_zip() {
-  local arch="$1" output_zip="$2" asset_name release_json download_url digest digest_url digest_file actual
+  local arch="$1" output_zip="$2" asset_name base_url download_url digest_url digest_file digest actual
   asset_name="Xray-linux-${arch}.zip"
-  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.59' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
-  download_url="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
-  digest="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')"
-  if [[ -z "$digest" ]]; then
-    digest_url="$(printf '%s' "$release_json" | jq -r --arg name "${asset_name}.dgst" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
-    if [[ -n "$digest_url" ]]; then
-      digest_file="$(mktemp)"
-      curl -fsSL "$digest_url" -o "$digest_file"
-      digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
-      rm -f "$digest_file"
+  base_url="${XRAY_DOWNLOAD_BASE_URL:-https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}}"
+  download_url="${base_url}/${asset_name}"
+  digest_url="${base_url}/${asset_name}.dgst"
+  curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.61" "$download_url" -o "$output_zip"
+  digest_file="$(mktemp)"
+  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.61" "$digest_url" -o "$digest_file"; then
+    digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
+    if [[ -n "$digest" ]]; then
+      actual="$(sha256sum "$output_zip" | awk '{print $1}')"
+      [[ "$actual" == "$digest" ]] || { echo 'ERROR: Xray checksum verification failed.' >&2; rm -f "$digest_file"; return 1; }
     fi
   fi
-  [[ -n "$download_url" ]] || { echo 'ERROR: failed to resolve Xray asset URL.' >&2; return 1; }
-  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 "$download_url" -o "$output_zip"
-  if [[ -n "$digest" ]]; then
-    actual="$(sha256sum "$output_zip" | awk '{print $1}')"
-    [[ "$actual" == "$digest" ]] || { echo 'ERROR: Xray checksum verification failed.' >&2; return 1; }
-  fi
+  rm -f "$digest_file"
 }
 
 install_xray_alpine() {
