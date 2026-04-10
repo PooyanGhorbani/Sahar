@@ -300,3 +300,7 @@ PUBLIC_HOST="vpn.example.com" AGENT_LISTEN_PORT="9797" sh install.sh agent
 
 - در نصب Master، نود محلی به‌صورت پیش‌فرض فعال و خودکار ثبت می‌شود؛ بنابراین بعد از نصب، جدول `servers` خالی نمی‌ماند و ساخت کاربر روی همان سرور ممکن است.
 - پیام‌های بات که به‌خاطر `parse_mode=HTML` با متن‌های شامل `<...>` می‌شکستند، fallback امن دارند و دیگر باعث از کار افتادن دکمه‌ها نمی‌شوند.
+
+
+## 0.1.72 fix
+- ensures the SQLite database directory/file exists before bot startup and preserves writable ownership for the service user.

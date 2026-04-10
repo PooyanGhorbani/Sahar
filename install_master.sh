@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.71"
+APP_VERSION="0.1.72"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -865,6 +865,8 @@ cfg = {
 path = Path(os.environ['APP_DATA_DIR']) / 'config.json'
 path.write_text(json.dumps(cfg, indent=2), encoding='utf-8')
 path.chmod(0o600)
+Path(cfg['database_path']).parent.mkdir(parents=True, exist_ok=True)
+Path(cfg['database_path']).touch(exist_ok=True)
 PY
   persist_bot_token
 
@@ -1258,6 +1260,7 @@ enable_services() {
     touch "$APP_LOG_DIR/local-agent.log"
   fi
   chown "$SERVICE_USER:$SERVICE_GROUP" "$APP_LOG_DIR"/*.log 2>/dev/null || true
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$APP_DATA_DIR"/*.db 2>/dev/null || true
   chmod 664 "$APP_LOG_DIR"/*.log 2>/dev/null || true
   chmod 775 "$APP_LOG_DIR"
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then

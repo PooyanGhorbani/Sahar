@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -14,7 +16,9 @@ class Database:
 
     @contextmanager
     def connect(self):
-        conn = sqlite3.connect(self.path, timeout=30)
+        db_path = Path(os.path.expanduser(os.path.expandvars(str(self.path))))
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
         try:
