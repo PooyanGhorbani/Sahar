@@ -1,0 +1,8 @@
+python-telegram-bot[job-queue]==22.6
+requests==2.32.3
+qrcode[pil]==7.4.2
+Flask==3.0.3
+gunicorn==22.0.0
+psutil==6.0.0
+paramiko==3.5.0
+cryptography==43.0.1
