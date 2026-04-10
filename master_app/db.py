@@ -475,7 +475,7 @@ class Database:
                     disk_percent, load_1m, user_count, xray_active, last_sync_at,
                     cf_zone_id, cf_record_id, cf_record_type, cf_dns_name, cf_tunnel_id, cf_tunnel_name, cf_tunnel_status,
                     provisioning_state, provisioning_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     api_url=excluded.api_url,
                     api_token=excluded.api_token,
