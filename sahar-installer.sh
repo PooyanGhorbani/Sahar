@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SAHAR_INSTALLER_VERSION="0.1.70"
+SAHAR_INSTALLER_VERSION="0.1.71"
 DEFAULT_WORKDIR="/opt/sahar"
 MODE="master"
 WORKDIR="$DEFAULT_WORKDIR"
@@ -13,7 +13,7 @@ __SAHAR_PAYLOAD__
 
 usage() {
   cat <<'EOU'
-Sahar single-file installer v0.1.70
+Sahar single-file installer v0.1.71
 
 Usage:
   bash <(curl -Ls https://raw.githubusercontent.com/PooyanGhorbani/Sahar/main/sahar-installer.sh) master
@@ -83,7 +83,7 @@ if [[ -n "$EXTRACT_ONLY" ]]; then
 fi
 mkdir -p "$TARGET_DIR"
 cp -a "$TMP_DIR/payload/." "$TARGET_DIR/"
-for file in install.sh install_master.sh install_agent.sh sahar-installer.sh sahar-installer-v0.1.70.sh; do
+for file in install.sh install_master.sh install_agent.sh sahar-installer.sh sahar-installer.sh; do
   [[ -f "$TARGET_DIR/$file" ]] && chmod +x "$TARGET_DIR/$file" || true
 done
 
