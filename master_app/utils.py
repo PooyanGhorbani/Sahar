@@ -24,6 +24,13 @@ SERVER_NAME_RE = re.compile(r'^[a-zA-Z0-9_.-]{2,64}$')
 def load_config(path: str) -> Dict:
     with open(path, 'r', encoding='utf-8') as fh:
         data = json.load(fh)
+    if 'cloudflare_tunnel_enabled' not in data:
+        if 'cloudflare_argo_enabled' in data:
+            data['cloudflare_tunnel_enabled'] = bool(data.get('cloudflare_argo_enabled'))
+        elif 'cloudflare_argo_tunnel_enabled' in data:
+            data['cloudflare_tunnel_enabled'] = bool(data.get('cloudflare_argo_tunnel_enabled'))
+    if 'cloudflare_argo_enabled' not in data:
+        data['cloudflare_argo_enabled'] = bool(data.get('cloudflare_tunnel_enabled', False))
     data['admin_ids'] = parse_admin_ids(data.get('admin_chat_ids', ''))
     return data
 
@@ -31,6 +38,7 @@ def load_config(path: str) -> Dict:
 def save_config(path: str, data: Dict) -> None:
     payload = dict(data)
     payload.pop('admin_ids', None)
+    payload['cloudflare_argo_enabled'] = bool(payload.get('cloudflare_tunnel_enabled', False))
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, 'w', encoding='utf-8') as fh:

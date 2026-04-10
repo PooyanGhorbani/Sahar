@@ -206,6 +206,7 @@ class SSHProvisioner:
         wrapped = f"sudo -S -p '' sh -lc {shlex.quote(command)}" if use_sudo else f"sh -lc {shlex.quote(command)}"
         stdin, stdout, stderr = ssh.exec_command(wrapped, timeout=timeout, get_pty=True)
         if use_sudo:
+            stdin.write(password + '\n')
             stdin.flush()
         out = stdout.read().decode('utf-8', 'ignore')
         err = stderr.read().decode('utf-8', 'ignore')
@@ -256,7 +257,7 @@ case "$arch" in
   armv7l|armv6l|arm) asset_name="cloudflared-linux-arm" ;;
   *) echo "unsupported arch for cloudflared: $arch" >&2; exit 1 ;;
 esac
-release_json=$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.55' "https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}")
+release_json=$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.58' "https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}")
 download_url=$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)
 expected_digest=$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')
 [ -n "$download_url" ] || {{ echo 'failed to resolve cloudflared download URL' >&2; exit 1; }}

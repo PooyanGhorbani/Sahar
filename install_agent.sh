@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.55"
+APP_VERSION="0.1.58"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -163,15 +163,28 @@ clear_fail_hint() {
   FAIL_HINT=""
 }
 
+timeout_supports_foreground() {
+  if ! command_exists timeout; then
+    return 1
+  fi
+  timeout --help 2>&1 | grep -q -- '--foreground'
+}
+
 run_with_timeout() {
   local timeout_s="$1" rc
   shift
   if command_exists timeout; then
-    if ! timeout --foreground "$timeout_s" "$@"; then
-      rc=$?
+    if timeout_supports_foreground; then
+      timeout --foreground "$timeout_s" "$@"
+    else
+      timeout "$timeout_s" "$@"
+    fi
+    rc=$?
+    if [[ "$rc" -ne 0 ]]; then
       if [[ "$rc" -eq 124 ]]; then
         set_fail_hint "Timed out after ${timeout_s}s"
-        printf 'timeout after %ss: %s\n' "$timeout_s" "$*" >> "$LOG_FILE"
+        printf 'timeout after %ss: %s
+' "$timeout_s" "$*" >> "$LOG_FILE"
       fi
       return "$rc"
     fi
@@ -179,7 +192,6 @@ run_with_timeout() {
   fi
   "$@"
 }
-
 run_step() {
   local label="$1" spinner_pid
   shift
@@ -373,6 +385,12 @@ install_packages() {
     fi
     run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv curl jq uuidgen ca-certificates bind-tools tar unzip logrotate build-base python3-dev musl-dev linux-headers git openssl
   fi
+  for cmd in python3 pip3 curl jq git unzip openssl; do
+    if ! command_exists "$cmd"; then
+      set_fail_hint "Required command missing after package install: $cmd"
+      return 1
+    fi
+  done
 }
 
 
@@ -555,7 +573,7 @@ map_xray_arch() {
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" asset_name release_json download_url digest digest_url digest_file actual
   asset_name="Xray-linux-${arch}.zip"
-  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.55' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
+  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.58' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
   download_url="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
   digest="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')"
   if [[ -z "$digest" ]]; then

@@ -2,21 +2,13 @@
 set -eu
 
 MODE="${1:-${SAHAR_INSTALL_MODE:-master}}"
-OS_ID=""
-OS_VERSION_ID=""
-OS_PRETTY_NAME=""
+OS_PRETTY_NAME="Detecting..."
+INIT_SYSTEM="Detecting..."
 OS_FAMILY=""
-INIT_SYSTEM=""
 LOG_FILE="/tmp/sahar-bootstrap-installer.log"
 TOTAL_STEPS=2
 CURRENT_STEP=0
-BAR_WIDTH=34
-CURRENT_LABEL="Preparing bootstrap"
-CURRENT_STATUS="Waiting"
-CURRENT_SPINNER="-"
-SPINNER_INDEX=0
 UI_TTY=0
-FAIL_HINT=""
 C_RESET=""
 C_BOLD=""
 C_DIM=""
@@ -24,6 +16,7 @@ C_GREEN=""
 C_CYAN=""
 C_YELLOW=""
 C_RED=""
+FAIL_HINT=""
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -36,174 +29,6 @@ setup_ui() {
     C_CYAN=$(printf '[36m')
     C_YELLOW=$(printf '[33m')
     C_RED=$(printf '[31m')
-    printf '[?25l'
-    trap cleanup_ui EXIT INT TERM
-  fi
-}
-
-cleanup_ui() {
-  if [ "$UI_TTY" -eq 1 ]; then
-    printf '[?25h'
-  fi
-}
-
-advance_spinner() {
-  case $((SPINNER_INDEX % 4)) in
-    0) CURRENT_SPINNER='|' ;;
-    1) CURRENT_SPINNER='/' ;;
-    2) CURRENT_SPINNER='-' ;;
-    3) CURRENT_SPINNER='\' ;;
-  esac
-  SPINNER_INDEX=$((SPINNER_INDEX + 1))
-}
-
-progress_bar() {
-  display_step=$CURRENT_STEP
-  done_slots=$((display_step * BAR_WIDTH / TOTAL_STEPS))
-  pending_slots=$((BAR_WIDTH - done_slots))
-  fill=$(printf '%*s' "$done_slots" '')
-  fill=$(printf '%s' "$fill" | tr ' ' '=')
-  empty=$(printf '%*s' "$pending_slots" '')
-  printf '%s%s' "$fill" "$empty"
-}
-
-print_banner() {
-  CURRENT_STATUS="Ready"
-  draw_screen
-}
-
-draw_screen() {
-  if [ "$UI_TTY" -ne 1 ]; then
-    return 0
-  fi
-  display_step=$CURRENT_STEP
-  percent=$((display_step * 100 / TOTAL_STEPS))
-  step_no=$((CURRENT_STEP + 1))
-  if [ "$step_no" -gt "$TOTAL_STEPS" ]; then
-    step_no=$TOTAL_STEPS
-  fi
-  bar=$(progress_bar)
-  printf '[H[2J'
-  printf '%s%sSahar Installer%s
-' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
-' "$C_DIM" "$C_RESET"
-  printf ' %sMode%s        %s
-' "$C_DIM" "$C_RESET" "$MODE"
-  printf ' %sSystem%s      %s
-' "$C_DIM" "$C_RESET" "${OS_PRETTY_NAME:-Detecting...}"
-  printf ' %sInit%s        %s
-' "$C_DIM" "$C_RESET" "${INIT_SYSTEM:-Detecting...}"
-  printf ' %sStep%s        %s/%s
-' "$C_DIM" "$C_RESET" "$step_no" "$TOTAL_STEPS"
-  printf ' %sStage%s       %s
-' "$C_DIM" "$C_RESET" "$CURRENT_LABEL"
-  printf ' %sStatus%s      %s
-' "$C_DIM" "$C_RESET" "$CURRENT_STATUS"
-  printf ' %sLog%s         %s
-
-' "$C_DIM" "$C_RESET" "$LOG_FILE"
-  printf ' %sProgress%s    [%s%s%s] %s%3s%%%s
-
-' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sBootstrap checks the system quickly, installs only missing base tools, then hands off.%s
-' "$C_YELLOW" "$C_RESET"
-}
-
-finish_progress() {
-  printf '
-'
-}
-
-fail_install() {
-  finish_progress
-  printf '%sInstallation failed.%s
-' "$C_RED" "$C_RESET" >&2
-  printf 'Step: %s
-' "$1" >&2
-  if [ -n "$FAIL_HINT" ]; then
-    printf 'Reason: %s
-' "$FAIL_HINT" >&2
-  fi
-  printf 'Details: %s
-' "$LOG_FILE" >&2
-  if [ -s "$LOG_FILE" ]; then
-    printf '
-Last log lines:
-' >&2
-    tail -n 20 "$LOG_FILE" >&2 || true
-  fi
-  exit 1
-}
-
-spinner_loop() {
-  start_ts=$(date +%s)
-  while :; do
-    elapsed=$(( $(date +%s) - start_ts ))
-    advance_spinner
-    CURRENT_STATUS="Running ${CURRENT_SPINNER}  ${elapsed}s"
-    draw_screen
-    sleep 0.12
-  done
-}
-
-
-set_fail_hint() {
-  FAIL_HINT="$1"
-}
-
-clear_fail_hint() {
-  FAIL_HINT=""
-}
-
-run_with_timeout() {
-  timeout_s="$1"
-  shift
-  if command_exists timeout; then
-    if ! timeout "$timeout_s" "$@"; then
-      rc=$?
-      if [ "$rc" -eq 124 ]; then
-        set_fail_hint "Timed out after ${timeout_s}s"
-        printf 'timeout after %ss: %s\n' "$timeout_s" "$*" >> "$LOG_FILE"
-      fi
-      return "$rc"
-    fi
-    return 0
-  fi
-  "$@"
-}
-
-run_step() {
-  label="$1"
-  shift
-  CURRENT_LABEL="$label"
-  clear_fail_hint
-  if [ "$UI_TTY" -eq 1 ]; then
-    spinner_loop &
-    spinner_pid=$!
-    if ! "$@" >>"$LOG_FILE" 2>&1; then
-      kill "$spinner_pid" 2>/dev/null || true
-      wait "$spinner_pid" 2>/dev/null || true
-      fail_install "$label"
-    fi
-    kill "$spinner_pid" 2>/dev/null || true
-    wait "$spinner_pid" 2>/dev/null || true
-  else
-    printf '[%s/%s] %s
-' "$((CURRENT_STEP + 1))" "$TOTAL_STEPS" "$label"
-    if ! "$@" >>"$LOG_FILE" 2>&1; then
-      fail_install "$label"
-    fi
-  fi
-  CURRENT_STEP=$((CURRENT_STEP + 1))
-  CURRENT_STATUS="Completed"
-  draw_screen
-}
-
-require_root() {
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "This installer must be run as root"
-    exit 1
   fi
 }
 
@@ -211,39 +36,95 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-detect_os() {
-  if [ ! -r /etc/os-release ]; then
-    echo "Unsupported Linux distribution: /etc/os-release not found"
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "This installer must be run as root" >&2
     exit 1
   fi
+}
 
+set_fail_hint() {
+  FAIL_HINT="$1"
+}
+
+progress_percent() {
+  echo $((CURRENT_STEP * 100 / TOTAL_STEPS))
+}
+
+draw_screen() {
+  [ "$UI_TTY" -eq 1 ] || return 0
+  printf '[H[2J'
+  printf '%s%sSahar Installer%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '%s------------------------------------------------------------%s
+' "$C_DIM" "$C_RESET"
+  printf ' Mode        %s
+' "$MODE"
+  printf ' System      %s
+' "$OS_PRETTY_NAME"
+  printf ' Init        %s
+' "$INIT_SYSTEM"
+  printf ' Step        %s/%s
+' "$((CURRENT_STEP + 1 <= TOTAL_STEPS ? CURRENT_STEP + 1 : TOTAL_STEPS))" "$TOTAL_STEPS"
+  printf ' Stage       %s
+' "$1"
+  printf ' Status      %s
+' "$2"
+  printf ' Log         %s
+
+' "$LOG_FILE"
+  printf ' Progress    %s%%
+
+' "$(progress_percent)"
+  printf '%sBootstrap only ensures bash is present, then hands off to the main installer.%s
+' "$C_YELLOW" "$C_RESET"
+}
+
+fail_install() {
+  stage="$1"
+  draw_screen "$stage" "Failed"
+  printf '%sInstallation failed.%s
+' "$C_RED" "$C_RESET" >&2
+  printf 'Step: %s
+' "$stage" >&2
+  if [ -n "$FAIL_HINT" ]; then
+    printf 'Reason: %s
+' "$FAIL_HINT" >&2
+  fi
+  printf 'Details: %s
+' "$LOG_FILE" >&2
+  tail -n 20 "$LOG_FILE" >&2 || true
+  exit 1
+}
+
+run_with_timeout() {
+  timeout_s="$1"
+  shift
+  if command_exists timeout; then
+    timeout "$timeout_s" "$@"
+  else
+    "$@"
+  fi
+}
+
+detect_os() {
+  if [ ! -r /etc/os-release ]; then
+    set_fail_hint "/etc/os-release not found"
+    return 1
+  fi
   . /etc/os-release
-
   OS_ID="${ID:-unknown}"
-  OS_VERSION_ID="${VERSION_ID:-unknown}"
   OS_PRETTY_NAME="${PRETTY_NAME:-unknown}"
-
   case "$OS_ID" in
-    alpine)
-      OS_FAMILY="alpine"
-      ;;
-    ubuntu|debian)
-      OS_FAMILY="debian"
-      ;;
+    alpine) OS_FAMILY="alpine" ;;
+    ubuntu|debian) OS_FAMILY="debian" ;;
     *)
       case "${ID_LIKE:-}" in
-        *debian*|*ubuntu*)
-          OS_FAMILY="debian"
-          ;;
-        *)
-          echo "Unsupported Linux distribution: ${OS_PRETTY_NAME}"
-          echo "Supported families: Alpine, Debian, Ubuntu"
-          exit 1
-          ;;
+        *debian*|*ubuntu*) OS_FAMILY="debian" ;;
+        *) set_fail_hint "Unsupported Linux distribution: ${PRETTY_NAME:-$OS_ID}"; return 1 ;;
       esac
       ;;
   esac
-
   if command_exists systemctl; then
     INIT_SYSTEM="systemd"
   elif command_exists rc-service; then
@@ -253,70 +134,44 @@ detect_os() {
   fi
 }
 
-bootstrap_tools_missing() {
-  for cmd in bash curl unzip git; do
-    if ! command_exists "$cmd"; then
-      return 0
-    fi
-  done
-  if [ ! -f /etc/ssl/certs/ca-certificates.crt ] && [ ! -d /etc/ssl/certs ]; then
-    return 0
-  fi
-  return 1
-}
-
-preflight_bootstrap() {
-  detect_os
-}
-
-run_bootstrap_preflight() {
-  if bootstrap_tools_missing; then
-    printf 'base tools missing
-' >> "$LOG_FILE"
-  else
-    printf 'base tools already available
-' >> "$LOG_FILE"
-  fi
-}
-
 ensure_bootstrap_packages() {
-  if ! bootstrap_tools_missing; then
-    printf 'bootstrap tools already present\n' >> "$LOG_FILE"
+  if command_exists bash; then
+    echo 'bootstrap bash already present' >> "$LOG_FILE"
     return 0
   fi
+  echo 'bootstrap installing bash only; remaining packages handled by mode installer' >> "$LOG_FILE"
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
-    run_with_timeout 180 apt-get update
-    run_with_timeout 300 apt-get install -y bash curl unzip ca-certificates git
+    run_with_timeout 180 apt-get update >> "$LOG_FILE" 2>&1
+    run_with_timeout 180 apt-get install -y bash >> "$LOG_FILE" 2>&1
   else
-    run_with_timeout 240 apk add --no-cache bash curl unzip ca-certificates git
+    run_with_timeout 120 apk add --no-cache bash >> "$LOG_FILE" 2>&1
   fi
+  command_exists bash
+}
+
+run_step() {
+  stage="$1"
+  shift
+  draw_screen "$stage" "Running"
+  if ! "$@" >> "$LOG_FILE" 2>&1; then
+    fail_install "$stage"
+  fi
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  draw_screen "$stage" "Completed"
 }
 
 run_mode() {
   case "$MODE" in
-    master)
-      exec bash ./install_master.sh
-      ;;
-    agent)
-      exec bash ./install_agent.sh
-      ;;
-    *)
-      echo "Invalid install mode. Use: sh install.sh master | sh install.sh agent"
-      exit 1
-      ;;
+    master) exec bash ./install_master.sh ;;
+    agent) exec bash ./install_agent.sh ;;
+    *) echo "Invalid install mode. Use: sh install.sh master | sh install.sh agent" >&2; exit 1 ;;
   esac
 }
 
 setup_ui
-print_banner
 require_root
-run_step "Checking system" preflight_bootstrap
-run_bootstrap_preflight
+run_step "Checking system" detect_os
 run_step "Preparing bootstrap tools" ensure_bootstrap_packages
 CURRENT_STEP=$TOTAL_STEPS
-CURRENT_LABEL="Handing off to ${MODE} installer"
-CURRENT_STATUS="Ready"
-draw_screen
-finish_progress
 run_mode
