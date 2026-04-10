@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.58"
+APP_VERSION="0.1.59"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -974,7 +974,7 @@ map_xray_arch() {
 download_xray_release_zip() {
   local arch="$1" output_zip="$2" asset_name release_json download_url digest digest_url digest_file actual
   asset_name="Xray-linux-${arch}.zip"
-  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.58' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
+  release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.59' "https://api.github.com/repos/XTLS/Xray-core/releases/tags/v${XRAY_VERSION}")"
   download_url="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)"
   digest="$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')"
   if [[ -z "$digest" ]]; then

@@ -1,10 +1,10 @@
-# سحر 0.1.58
+# سحر 0.1.59
 
 
 **سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.58-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.59-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)
@@ -45,6 +45,7 @@
 - `install.sh` شروع نصب
 - `install_master.sh` نصب Master
 - `install_agent.sh` نصب Agent
+- `sahar-installer-v0.1.59.sh` نصب تک‌فایلی برای اجرا با `bash <(curl -Ls https://...)`
 - `master_app/` کدهای Master
 - `agent_app/` کدهای Agent
 - `VERSION` نسخه بسته
@@ -89,6 +90,36 @@ sh -c 'set -e; if ! command -v git >/dev/null 2>&1; then if [ -f /etc/alpine-rel
 - اگر `git` نصب نباشد، خود دستور آن را نصب می‌کند
 - اگر مسیر `/opt/sahar` را نمی‌خواهی، آن را با مسیر دلخواه خودت عوض کن
 - برای آپدیت بعدی هم می‌توانی دوباره همین دستور را اجرا کنی
+
+
+## نصب تک‌فایلی با curl | Single-file curl installer
+
+اگر بخواهی نصب را فقط با **یک فایل Bash** منتشر کنی، این بسته فایل زیر را هم دارد:
+
+```text
+sahar-installer-v0.1.59.sh
+```
+
+نمونه اجرا برای Master:
+
+```bash
+bash <(curl -Ls https://YOUR-DOMAIN/sahar-installer-v0.1.59.sh) master
+```
+
+نمونه اجرا برای Agent:
+
+```bash
+bash <(curl -Ls https://YOUR-DOMAIN/sahar-installer-v0.1.59.sh) agent
+```
+
+نکته‌ها:
+- این اسکریپت payload پروژه را داخل خودش دارد و آن را در مسیر کاری extract می‌کند.
+- برای استفاده با `curl`, فایل باید روی یک آدرس **HTTPS** عمومی host شده باشد.
+- روی Alpine اگر `bash` نصب نباشد، اول این را بزن:
+
+```bash
+apk add --no-cache bash
+```
 
 ## سیستم‌عامل‌های پشتیبانی‌شده | Supported operating systems
 

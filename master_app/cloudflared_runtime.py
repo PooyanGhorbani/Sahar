@@ -49,7 +49,7 @@ def _asset_name(machine: str) -> str:
 
 def _release_asset_metadata(asset_name: str) -> tuple[str, str]:
     url = f'https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}'
-    req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Sahar/0.1.58'})
+    req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Sahar/0.1.59'})
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.load(resp)
     for asset in data.get('assets', []):
@@ -75,7 +75,7 @@ def install_binary(dest_path: str = BINARY_PATH) -> str:
     fd, tmp_path = tempfile.mkstemp(prefix='cloudflared-', suffix='.bin')
     os.close(fd)
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Sahar/0.1.58'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'Sahar/0.1.59'})
         with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, 'wb') as fh:
             shutil.copyfileobj(resp, fh)
         if digest:
