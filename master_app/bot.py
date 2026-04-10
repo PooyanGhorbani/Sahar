@@ -54,7 +54,7 @@ from utils import (
     parse_admin_ids,
 )
 
-CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json')
+CONFIG_PATH = os.path.expandvars(os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json'))
 config = load_config(CONFIG_PATH)
 setup_logging(config['log_path'])
 LOGGER = logging.getLogger(__name__)

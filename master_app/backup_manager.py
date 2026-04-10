@@ -59,7 +59,7 @@ class BackupManager:
             path = self.config.get(key)
             if path and os.path.exists(path):
                 shutil.copy2(path, state_dir / os.path.basename(path))
-        config_path = os.environ.get('SAHAR_CONFIG')
+        config_path = os.path.expandvars(os.environ.get('SAHAR_CONFIG', ''))
         if config_path and os.path.exists(config_path):
             shutil.copy2(config_path, state_dir / 'config.json')
         qr_dir = self.config.get('qr_dir')

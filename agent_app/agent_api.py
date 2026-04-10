@@ -11,7 +11,7 @@ from flask import Flask, jsonify, request, send_file
 from utils import load_config, now_iso, parse_allowed_sources, safe_compare, save_config, setup_logging, source_allowed, xray_version
 from xray_manager import XrayManager
 
-CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-agent/data/config.json')
+CONFIG_PATH = os.path.expandvars(os.environ.get('SAHAR_CONFIG', '/opt/sahar-agent/data/config.json'))
 CONFIG = load_config(CONFIG_PATH)
 setup_logging(CONFIG['log_path'])
 LOGGER = logging.getLogger('agent_api')

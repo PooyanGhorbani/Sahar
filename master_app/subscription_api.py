@@ -8,7 +8,7 @@ from flask import Flask, Response, jsonify
 from db import Database
 from utils import build_vless_link_for_profile, load_config, setup_logging
 
-CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json')
+CONFIG_PATH = os.path.expandvars(os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json'))
 CONFIG = load_config(CONFIG_PATH)
 setup_logging(CONFIG['log_path'])
 LOGGER = logging.getLogger('subscription_api')

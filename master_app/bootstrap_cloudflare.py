@@ -4,7 +4,7 @@ import logging, os
 from cloudflare_manager import CloudflareManager
 from db import Database
 from utils import load_config, setup_logging
-CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json')
+CONFIG_PATH = os.path.expandvars(os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json'))
 API_TOKEN = os.environ.get('CF_API_TOKEN', '')
 def main() -> int:
     config = load_config(CONFIG_PATH)

@@ -8,6 +8,7 @@ OS_FAMILY=""
 LOG_FILE="/tmp/sahar-bootstrap-installer.log"
 TOTAL_STEPS=2
 CURRENT_STEP=0
+STEP_PROGRESS=0
 UI_TTY=0
 C_RESET=""
 C_BOLD=""
@@ -48,7 +49,7 @@ set_fail_hint() {
 }
 
 progress_percent() {
-  echo $((CURRENT_STEP * 100 / TOTAL_STEPS))
+  echo $(((CURRENT_STEP * 100 + STEP_PROGRESS) / TOTAL_STEPS))
 }
 
 draw_screen() {
@@ -108,6 +109,7 @@ run_with_timeout() {
 }
 
 detect_os() {
+  STEP_PROGRESS=20
   if [ ! -r /etc/os-release ]; then
     set_fail_hint "/etc/os-release not found"
     return 1
@@ -125,6 +127,7 @@ detect_os() {
       esac
       ;;
   esac
+  STEP_PROGRESS=70
   if command_exists systemctl; then
     INIT_SYSTEM="systemd"
   elif command_exists rc-service; then
@@ -132,32 +135,41 @@ detect_os() {
   else
     INIT_SYSTEM="unknown"
   fi
+  STEP_PROGRESS=100
 }
 
 ensure_bootstrap_packages() {
   if command_exists bash; then
+    STEP_PROGRESS=100
     echo 'bootstrap bash already present' >> "$LOG_FILE"
     return 0
   fi
   echo 'bootstrap installing bash only; remaining packages handled by mode installer' >> "$LOG_FILE"
   if [ "$OS_FAMILY" = "debian" ]; then
     export DEBIAN_FRONTEND=noninteractive
+    STEP_PROGRESS=25
     run_with_timeout 180 apt-get update >> "$LOG_FILE" 2>&1
+    STEP_PROGRESS=55
     run_with_timeout 180 apt-get install -y bash >> "$LOG_FILE" 2>&1
   else
+    STEP_PROGRESS=40
     run_with_timeout 120 apk add --no-cache bash >> "$LOG_FILE" 2>&1
   fi
   command_exists bash
+  STEP_PROGRESS=100
 }
 
 run_step() {
   stage="$1"
   shift
+  STEP_PROGRESS=0
   draw_screen "$stage" "Running"
   if ! "$@" >> "$LOG_FILE" 2>&1; then
     fail_install "$stage"
   fi
+  STEP_PROGRESS=100
   CURRENT_STEP=$((CURRENT_STEP + 1))
+  STEP_PROGRESS=0
   draw_screen "$stage" "Completed"
 }
 

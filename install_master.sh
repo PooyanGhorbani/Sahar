@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.61"
+APP_VERSION="0.1.63"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -30,6 +30,9 @@ LOG_FILE="/tmp/sahar-master-installer.log"
 STATUS_FILE="/tmp/sahar-master-installer.status"
 TOTAL_STEPS=13
 CURRENT_STEP=0
+STEP_PROGRESS=0
+STEP_PROGRESS_CEILING=0
+STEP_PROGRESS_STARTED_AT=0
 BAR_WIDTH=40
 CURRENT_LABEL="Preparing installer"
 CURRENT_STATUS="Waiting"
@@ -84,9 +87,72 @@ advance_spinner() {
   SPINNER_INDEX=$((SPINNER_INDEX + 1))
 }
 
+clamp_percent() {
+  local value="${1:-0}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    value=0
+  fi
+  if (( value < 0 )); then
+    value=0
+  elif (( value > 100 )); then
+    value=100
+  fi
+  printf '%s' "$value"
+}
+
+reset_step_progress() {
+  STEP_PROGRESS=0
+  STEP_PROGRESS_CEILING=0
+  STEP_PROGRESS_STARTED_AT=$(date +%s)
+}
+
+set_step_progress() {
+  local value
+  value="$(clamp_percent "${1:-0}")"
+  STEP_PROGRESS="$value"
+  STEP_PROGRESS_CEILING="$value"
+  STEP_PROGRESS_STARTED_AT=$(date +%s)
+  if [[ $# -ge 2 && -n "${2:-}" ]]; then
+    status_note "$2"
+  fi
+}
+
+begin_step_phase() {
+  local start cap
+  start="$(clamp_percent "${1:-0}")"
+  cap="$(clamp_percent "${2:-${1:-0}}")"
+  if (( cap < start )); then
+    cap=$start
+  fi
+  STEP_PROGRESS="$start"
+  STEP_PROGRESS_CEILING="$cap"
+  STEP_PROGRESS_STARTED_AT=$(date +%s)
+  if [[ $# -ge 3 && -n "${3:-}" ]]; then
+    status_note "$3"
+  fi
+}
+
+effective_step_progress() {
+  local visible elapsed auto
+  visible="$STEP_PROGRESS"
+  if (( STEP_PROGRESS_CEILING > STEP_PROGRESS )); then
+    elapsed=$(( $(date +%s) - STEP_PROGRESS_STARTED_AT ))
+    auto=$((STEP_PROGRESS + elapsed / 4))
+    if (( auto >= STEP_PROGRESS_CEILING )); then
+      auto=$((STEP_PROGRESS_CEILING - 1))
+    fi
+    if (( auto > visible )); then
+      visible=$auto
+    fi
+  fi
+  printf '%s' "$visible"
+}
+
 progress_bar() {
-  local done_slots pending_slots fill empty
-  done_slots=$((CURRENT_STEP * BAR_WIDTH / TOTAL_STEPS))
+  local step_percent overall_percent done_slots pending_slots fill empty
+  step_percent="$(effective_step_progress)"
+  overall_percent=$(((CURRENT_STEP * 100 + step_percent) / TOTAL_STEPS))
+  done_slots=$((overall_percent * BAR_WIDTH / 100))
   pending_slots=$((BAR_WIDTH - done_slots))
   fill=$(printf '%*s' "$done_slots" '')
   fill=${fill// /=}
@@ -97,7 +163,7 @@ progress_bar() {
 draw_screen() {
   local percent step_no bar
   (( UI_TTY )) || return 0
-  percent=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+  percent=$(((CURRENT_STEP * 100 + $(effective_step_progress)) / TOTAL_STEPS))
   step_no=$((CURRENT_STEP + 1))
   if (( step_no > TOTAL_STEPS )); then
     step_no=$TOTAL_STEPS
@@ -126,10 +192,11 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sOnly the bot token is requested. Package details stay hidden.%s\n' "$C_YELLOW" "$C_RESET"
-  printf '%sPython environment shows cache and wheel activity live.%s\n' "$C_DIM" "$C_RESET"
+  printf '%sOnly the bot token is requested. Package details stay hidden.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '%sPython environment shows cache and wheel activity live.%s
+' "$C_DIM" "$C_RESET"
 }
-
 ui_newline() {
   printf '\n'
 }
@@ -206,6 +273,7 @@ run_step() {
   shift
   CURRENT_LABEL="$label"
   clear_fail_hint
+  reset_step_progress
   : > "$STATUS_FILE"
   if (( UI_TTY )); then
     spinner_loop &
@@ -224,8 +292,10 @@ run_step() {
       ui_fail "$label"
     fi
   fi
+  set_step_progress 100
   : > "$STATUS_FILE"
   CURRENT_STEP=$((CURRENT_STEP + 1))
+  reset_step_progress
   CURRENT_STATUS="Completed"
   draw_screen
 }
@@ -371,9 +441,12 @@ install_packages() {
       fi
     done
     if [[ $need_install -eq 0 ]]; then
+      set_step_progress 100 "System packages already available"
       return 0
     fi
+    begin_step_phase 10 28 "Refreshing package metadata"
     run_with_timeout 300 apt update
+    begin_step_phase 34 82 "Installing system packages"
     run_with_timeout 900 apt install -y python3 python3-venv python3-pip sqlite3 curl ca-certificates tar zip unzip jq uuid-runtime dnsutils logrotate git openssl
   else
     for cmd in python3 pip3 curl unzip jq git gcc openssl; do
@@ -383,16 +456,20 @@ install_packages() {
       fi
     done
     if [[ $need_install -eq 0 ]]; then
+      set_step_progress 100 "System packages already available"
       return 0
     fi
+    begin_step_phase 18 86 "Installing Alpine system packages"
     run_with_timeout 1200 apk add --no-cache bash python3 py3-pip py3-virtualenv sqlite curl ca-certificates tar zip unzip jq uuidgen bind-tools logrotate shadow build-base python3-dev musl-dev linux-headers git openssl
   fi
+  begin_step_phase 88 96 "Verifying installed commands"
   for cmd in python3 pip3 curl tar unzip jq git openssl; do
     if ! command_exists "$cmd"; then
       set_fail_hint "Required command missing after package install: $cmd"
       return 1
     fi
   done
+  set_step_progress 100 "System packages are ready"
 }
 
 ensure_user() {
@@ -722,12 +799,15 @@ setup_venv() {
   mkdir -p "$INSTALLER_STATE_DIR" "$PIP_CACHE_DIR" "$WHEELHOUSE_DIR"
   state_file="$INSTALLER_STATE_DIR/master-requirements.sha256"
   wheel_state_file="$INSTALLER_STATE_DIR/master-wheelhouse.sha256"
-  status_note "Preparing virtual environment"
+  begin_step_phase 5 14 "Preparing virtual environment"
   if ! run_with_timeout 180 python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
     if command -v virtualenv >/dev/null 2>&1; then
+      begin_step_phase 10 18 "Creating virtual environment with virtualenv"
       run_with_timeout 180 virtualenv "$VENV_DIR"
     else
+      begin_step_phase 10 16 "Bootstrapping ensurepip"
       run_with_timeout 180 python3 -m ensurepip --upgrade || true
+      begin_step_phase 16 22 "Creating virtual environment"
       run_with_timeout 180 python3 -m venv "$VENV_DIR"
     fi
   fi
@@ -735,30 +815,31 @@ setup_venv() {
   venv_python_tag="$($VENV_DIR/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")"
   expected_wheel_state="${req_hash}|${OS_FAMILY}|${venv_python_tag}"
   if [[ -x "$VENV_DIR/bin/python" && -x "$VENV_DIR/bin/pip" && -f "$state_file" ]] && [[ "$(cat "$state_file")" == "$expected_wheel_state" ]]; then
-    status_note "Using cached Python environment"
+    set_step_progress 100 "Using cached Python environment"
     return 0
   fi
   export PIP_CACHE_DIR
-  status_note "Refreshing pip tooling"
+  begin_step_phase 24 34 "Refreshing pip, setuptools and wheel"
   run_with_timeout 600 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
   wheel_state=""
   if [[ -f "$wheel_state_file" ]]; then
     wheel_state="$(cat "$wheel_state_file")"
   fi
   if [[ "$wheel_state" != "$expected_wheel_state" ]]; then
-    status_note "Building wheels for Python packages"
+    begin_step_phase 38 72 "Building wheels for Python packages"
     rm -rf "$WHEELHOUSE_DIR"
     mkdir -p "$WHEELHOUSE_DIR"
     run_with_timeout 2400 "$VENV_DIR/bin/pip" wheel -r "$APP_APP_DIR/requirements.txt" --wheel-dir "$WHEELHOUSE_DIR"
     printf '%s
 ' "$expected_wheel_state" > "$wheel_state_file"
   else
-    status_note "Using cached wheels"
+    set_step_progress 72 "Using cached wheels"
   fi
-  status_note "Installing from cached wheelhouse"
+  begin_step_phase 76 96 "Installing from cached wheelhouse"
   run_with_timeout 1800 "$VENV_DIR/bin/pip" install --no-index --find-links "$WHEELHOUSE_DIR" -r "$APP_APP_DIR/requirements.txt"
   printf '%s
 ' "$expected_wheel_state" > "$state_file"
+  set_step_progress 100 "Python environment is ready"
 }
 
 bootstrap_cloudflare() {
@@ -977,13 +1058,20 @@ download_xray_release_zip() {
   base_url="${XRAY_DOWNLOAD_BASE_URL:-https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}}"
   download_url="${base_url}/${asset_name}"
   digest_url="${base_url}/${asset_name}.dgst"
-  curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.61" "$download_url" -o "$output_zip"
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.63" "$download_url" -o "$output_zip"; then
+    set_fail_hint "Failed to download Xray archive"
+    return 1
+  fi
   digest_file="$(mktemp)"
-  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.61" "$digest_url" -o "$digest_file"; then
+  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.63" "$digest_url" -o "$digest_file"; then
     digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
     if [[ -n "$digest" ]]; then
       actual="$(sha256sum "$output_zip" | awk '{print $1}')"
-      [[ "$actual" == "$digest" ]] || { echo 'ERROR: Xray checksum verification failed.' >&2; rm -f "$digest_file"; return 1; }
+      if [[ "$actual" != "$digest" ]]; then
+        rm -f "$digest_file"
+        set_fail_hint "Xray checksum verification failed"
+        return 1
+      fi
     fi
   fi
   rm -f "$digest_file"
@@ -993,20 +1081,25 @@ install_xray_alpine() {
   local arch tmpdir
   arch="$(map_xray_arch)"
   tmpdir="$(mktemp -d)"
+  begin_step_phase 10 18 "Preparing Xray directories"
   mkdir -p /usr/local/bin /usr/local/etc/xray /usr/local/share/xray /var/log/xray
+  begin_step_phase 22 58 "Downloading Xray release archive"
   if ! download_xray_release_zip "$arch" "$tmpdir/xray.zip"; then
     rm -rf "$tmpdir"
-    exit 1
+    return 1
   fi
+  set_step_progress 62 "Extracting Xray archive"
   unzip -qo "$tmpdir/xray.zip" -d "$tmpdir"
   if [[ ! -f "$tmpdir/xray" ]]; then
-    echo "ERROR: downloaded Xray archive does not contain the xray binary." >&2
     rm -rf "$tmpdir"
-    exit 1
+    set_fail_hint "Downloaded Xray archive does not contain the xray binary"
+    return 1
   fi
+  begin_step_phase 66 82 "Installing Xray binaries"
   install -m 0755 "$tmpdir/xray" /usr/local/bin/xray
   if [[ -f "$tmpdir/geoip.dat" ]]; then install -m 0644 "$tmpdir/geoip.dat" /usr/local/share/xray/geoip.dat; fi
   if [[ -f "$tmpdir/geosite.dat" ]]; then install -m 0644 "$tmpdir/geosite.dat" /usr/local/share/xray/geosite.dat; fi
+  begin_step_phase 86 96 "Writing Xray service definition"
   if [[ ! -f /usr/local/etc/xray/config.json ]]; then
     echo '{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom","settings":{}}]}' > /usr/local/etc/xray/config.json
   fi
@@ -1024,16 +1117,20 @@ depend() { need net; }
 EOF
   chmod +x /etc/init.d/xray
   rm -rf "$tmpdir"
+  set_step_progress 100 "Xray components are ready"
 }
 
 
 install_xray_if_needed() {
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
     if command_exists xray; then
+      set_step_progress 100 "Xray already installed"
       return 0
     fi
-    echo "Installing Xray..."
+    status_note "Installing Xray"
     install_xray_alpine
+  else
+    set_step_progress 100 "Local Xray node is disabled"
   fi
 }
 
@@ -1092,7 +1189,7 @@ enable_services() {
     fi
   fi
   if [[ "$LOCAL_NODE_ENABLED" == true ]]; then
-    if ! SAHAR_CONFIG='$APP_DATA_DIR/config.json' "$VENV_DIR/bin/python" "$APP_APP_DIR/register_local_server.py"; then
+    if ! SAHAR_CONFIG="$APP_DATA_DIR/config.json" "$VENV_DIR/bin/python" "$APP_APP_DIR/register_local_server.py"; then
       echo "Local node registration failed. See $APP_LOG_DIR/provision.log" >&2
       return 1
     fi

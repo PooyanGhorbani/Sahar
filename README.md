@@ -1,10 +1,10 @@
-# سحر 0.1.61
+# سحر 0.1.63
 
 
 **سامانه مدیریت Xray / VLESS با معماری Master / Agent و پنل تلگرام**  
 **Telegram-first Xray / VLESS management platform with master-agent architecture**
 
-![version](https://img.shields.io/badge/version-0.1.61-8b5cf6)
+![version](https://img.shields.io/badge/version-0.1.63-8b5cf6)
 ![platform](https://img.shields.io/badge/linux-Debian%20%7C%20Ubuntu%20%7C%20Alpine-0ea5e9)
 ![profiles](https://img.shields.io/badge/VLESS-Reality%20%2B%20Simple-22c55e)
 ![panel](https://img.shields.io/badge/Panel-Telegram-2563eb)
@@ -46,7 +46,7 @@
 - `install_master.sh` نصب Master
 - `install_agent.sh` نصب Agent
 - `sahar-installer.sh` نصب تک‌فایلی پایدار برای اجرا مستقیم از GitHub با `bash <(curl -fsSL ...)`
-- `sahar-installer-v0.1.61.sh` نسخه‌ی versioned همان installer برای آرشیو و rollback
+- `sahar-installer-v0.1.63.sh` نسخه‌ی versioned همان installer برای آرشیو و rollback
 - `master_app/` کدهای Master
 - `agent_app/` کدهای Agent
 - `VERSION` نسخه بسته
@@ -120,7 +120,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/PooyanGhorbani/Sahar/main/sa
 فایل versioned هم برای آرشیو داخل پروژه نگه داشته شده است:
 
 ```text
-sahar-installer-v0.1.61.sh
+sahar-installer-v0.1.63.sh
 ```
 
 نکته‌ها:

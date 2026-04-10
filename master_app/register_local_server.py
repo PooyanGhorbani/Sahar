@@ -11,7 +11,7 @@ from db import Database
 from error_tools import record_error
 from utils import load_config, now_iso, setup_logging
 
-CONFIG_PATH = os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json')
+CONFIG_PATH = os.path.expandvars(os.environ.get('SAHAR_CONFIG', '/opt/sahar-master/data/config.json'))
 CONFIG = load_config(CONFIG_PATH)
 setup_logging(CONFIG['log_path'])
 DB = Database(CONFIG['database_path'])
