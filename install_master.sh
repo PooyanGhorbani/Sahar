@@ -760,35 +760,33 @@ prompt_for_install_inputs() {
 ' "$C_DIM" "$C_RESET"
     printf ' Only three values are needed. Cloudflare tunnel and DNS will be configured automatically.
 '
+    printf ' Input is visible while typing so you can verify tokens and domain before validation starts.
+'
     printf ' The first private chat that sends /start becomes owner automatically.
 
 '
   fi
   if [[ -z "${BOT_TOKEN:-}" ]]; then
     if (( UI_TTY )); then
-      read -rsp ' 🤖 Telegram BOT_TOKEN: ' BOT_TOKEN_INPUT || true
-      printf '
-'
+      read -r -p ' 🤖 Telegram bot token (visible, example: 123456:ABCDEF...): ' BOT_TOKEN_INPUT || true
     else
-      read -r -p 'Telegram BOT_TOKEN: ' BOT_TOKEN_INPUT || true
+      read -r -p 'Telegram bot token (visible, example: 123456:ABCDEF...): ' BOT_TOKEN_INPUT || true
     fi
     BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
   fi
   if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
     if (( UI_TTY )); then
-      read -rsp ' ☁️  Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT || true
-      printf '
-'
+      read -r -p ' ☁️  Cloudflare API token (visible): ' CLOUDFLARE_API_TOKEN_INPUT || true
     else
-      read -r -p 'Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT || true
+      read -r -p 'Cloudflare API token (visible): ' CLOUDFLARE_API_TOKEN_INPUT || true
     fi
     CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
   fi
   if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
     if (( UI_TTY )); then
-      read -r -p ' 🌐 Domain for subdomains (example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
+      read -r -p ' 🌐 Domain for subdomains (visible, example: example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
     else
-      read -r -p 'Domain for subdomains (example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
+      read -r -p 'Domain for subdomains (visible, example: example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
     fi
     CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
   fi
