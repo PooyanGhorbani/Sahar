@@ -57,6 +57,8 @@ OS_PRETTY_NAME=""
 OS_FAMILY=""
 INIT_SYSTEM=""
 XRAY_VERSION="26.1.13"
+UI_LANG="${UI_LANG:-fa}"
+UI_LANG_LABEL="فارسی"
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -79,6 +81,44 @@ cleanup_ui() {
   if (( UI_TTY )); then
     printf '[?25h'
   fi
+}
+
+select_language() {
+  local choice=""
+  if [[ ! -t 0 ]]; then
+    UI_LANG="${UI_LANG:-fa}"
+  fi
+  if (( UI_TTY )); then
+    printf '[H[2J'
+  fi
+  printf '%s%s%s
+' "$C_BOLD" "$C_CYAN" 'زبان خود را انتخاب کنید / Choose your language' "$C_RESET"
+  printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
+' "$C_DIM" "$C_RESET"
+  printf '  1) فارسی
+'
+  printf '  2) English
+
+'
+  if [[ -t 0 ]]; then
+    if (( UI_TTY )); then
+      printf '%s' "$C_BOLD"
+    fi
+    read -r -p 'Selection [1/2]: ' choice || true
+    if (( UI_TTY )); then
+      printf '%s' "$C_RESET"
+    fi
+  fi
+  case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    2|en|english)
+      UI_LANG='en'
+      UI_LANG_LABEL='English'
+      ;;
+    *)
+      UI_LANG='fa'
+      UI_LANG_LABEL='فارسی'
+      ;;
+  esac
 }
 
 advance_spinner() {
@@ -184,6 +224,8 @@ draw_screen() {
 ' "$C_DIM" "$C_RESET" "${OS_PRETTY_NAME:-Detecting...}"
   printf ' %sInit%s        %s
 ' "$C_DIM" "$C_RESET" "${INIT_SYSTEM:-Detecting...}"
+  printf ' %sLanguage%s    %s
+' "$C_DIM" "$C_RESET" "${UI_LANG_LABEL:-فارسی}"
   printf ' %sStep%s        %d/%d
 ' "$C_DIM" "$C_RESET" "$step_no" "$TOTAL_STEPS"
   printf ' %sStage%s       %s
@@ -2442,14 +2484,15 @@ print_done() {
 
 main() {
   setup_ui
+  select_language
   print_banner
   require_root
   run_step "Checking system" check_os
+  run_step "Running preflight checks" preflight_checks
+  run_step "Installing system packages" install_packages
   prepare_install_inputs
   run_step "Validating bot token" validate_bot_token
   run_step "Validating Cloudflare access" validate_cloudflare_inputs
-  run_step "Running preflight checks" preflight_checks
-  run_step "Installing system packages" install_packages
   run_step "Creating service account" ensure_user
   run_step "Preparing defaults" ask_config
   run_step "Creating directories" prepare_dirs
