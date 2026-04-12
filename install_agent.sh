@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.72"
+APP_VERSION="0.1.74"
 
 APP_DIR="/opt/sahar-agent"
 APP_APP_DIR="$APP_DIR/app"
@@ -736,12 +736,12 @@ download_xray_release_zip() {
   base_url="${XRAY_DOWNLOAD_BASE_URL:-https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}}"
   download_url="${base_url}/${asset_name}"
   digest_url="${base_url}/${asset_name}.dgst"
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.72" "$download_url" -o "$output_zip"; then
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.74" "$download_url" -o "$output_zip"; then
     set_fail_hint "Failed to download Xray archive"
     return 1
   fi
   digest_file="$(mktemp)"
-  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.72" "$digest_url" -o "$digest_file"; then
+  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.74" "$digest_url" -o "$digest_file"; then
     digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
     if [[ -n "$digest" ]]; then
       actual="$(sha256sum "$output_zip" | awk '{print $1}')"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_VERSION="0.1.72"
+APP_VERSION="0.1.74"
 
 APP_DIR="/opt/sahar-master"
 APP_APP_DIR="$APP_DIR/app"
@@ -58,7 +58,7 @@ OS_FAMILY=""
 INIT_SYSTEM=""
 XRAY_VERSION="26.1.13"
 UI_LANG="${UI_LANG:-fa}"
-UI_LANG_LABEL="فارسی"
+UI_LANG_LABEL="پارسی"
 
 setup_ui() {
   : > "$LOG_FILE"
@@ -92,19 +92,18 @@ select_language() {
     printf '[H[2J'
   fi
   printf '%s%s%s
-' "$C_BOLD" "$C_CYAN" 'زبان خود را انتخاب کنید / Choose your language' "$C_RESET"
+' "$C_BOLD" "$C_CYAN" 'زبان خود را انتخاب کنید / Choose your language / 请选择语言' "$C_RESET"
   printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
 ' "$C_DIM" "$C_RESET"
-  printf '  1) فارسی
-'
-  printf '  2) English
+  printf '  %s1) پارسی%s  |  %s2) English%s  |  %s3) 中文%s
 
-'
+' \
+    "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
   if [[ -t 0 ]]; then
     if (( UI_TTY )); then
       printf '%s' "$C_BOLD"
     fi
-    read -r -p 'Selection [1/2]: ' choice || true
+    read -r -p 'Selection [1/2/3]: ' choice || true
     if (( UI_TTY )); then
       printf '%s' "$C_RESET"
     fi
@@ -114,9 +113,13 @@ select_language() {
       UI_LANG='en'
       UI_LANG_LABEL='English'
       ;;
+    3|zh|cn|zh-cn|chinese|中文)
+      UI_LANG='zh'
+      UI_LANG_LABEL='中文'
+      ;;
     *)
       UI_LANG='fa'
-      UI_LANG_LABEL='فارسی'
+      UI_LANG_LABEL='پارسی'
       ;;
   esac
 }
@@ -225,7 +228,7 @@ draw_screen() {
   printf ' %sInit%s        %s
 ' "$C_DIM" "$C_RESET" "${INIT_SYSTEM:-Detecting...}"
   printf ' %sLanguage%s    %s
-' "$C_DIM" "$C_RESET" "${UI_LANG_LABEL:-فارسی}"
+' "$C_DIM" "$C_RESET" "${UI_LANG_LABEL:-پارسی}"
   printf ' %sStep%s        %d/%d
 ' "$C_DIM" "$C_RESET" "$step_no" "$TOTAL_STEPS"
   printf ' %sStage%s       %s
@@ -238,9 +241,9 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sفقط سه مقدار لازم است / Only three values are requested: Telegram bot token, Cloudflare API token and domain.%s
+  printf '%sفقط سه مقدار لازم است / Only three values are requested / 只需要三个值：Telegram 机器人令牌、Cloudflare API 令牌和域名。%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '%sبقیه کارها خودکار انجام می‌شود / Cloudflare tunnel and DNS are configured automatically when those values are provided.%s
+  printf '%sبقیه کارها خودکار انجام می‌شود / Cloudflare tunnel and DNS are configured automatically when those values are provided / 提供这些值后，其余步骤将自动完成。%s
 ' "$C_DIM" "$C_RESET"
 }
 ui_newline() {
@@ -791,27 +794,27 @@ telegram_bot_enabled() {
 }
 
 show_bot_token_help() {
-  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token%s
+  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token / Telegram 机器人令牌%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چیزی که لازم داری / What you need:%s توکن HTTP API ربات تلگرام.
+  printf '  %s• چیزی که لازم داری / What you need / 你需要什么：%s توکن HTTP API ربات تلگرام / Telegram HTTP API bot token / Telegram 机器人 HTTP API 令牌。
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token.%s
+  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token. / 从哪里获取：打开 Telegram，联系 BotFather，运行 /newbot（或打开已有机器人），然后复制令牌。%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نمونه درست / Correct format example:%s 123456789:AAExampleTokenValue
+  printf '  %s• نمونه درست / Correct format example / 正确格式示例：%s 123456789:AAExampleTokenValue
 
 ' "$C_YELLOW" "$C_RESET"
 }
 
 show_cloudflare_token_help() {
-  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token%s
+  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token / Cloudflare API 令牌%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key.%s
+  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key. / 你需要什么：需要的是 Cloudflare API 令牌，不是 Global API Key。%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• از کجا بگیری / Where to get it: Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
+  printf '  %s• از کجا بگیری / Where to get it / 从哪里获取：Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نوع پیشنهادی / Recommended type:%s Custom Token
+  printf '  %s• نوع پیشنهادی / Recommended type / 推荐类型：%s Custom Token
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• دسترسی‌های لازم / Required permissions:%s
+  printf '  %s• دسترسی‌های لازم / Required permissions / 所需权限：%s
 ' "$C_YELLOW" "$C_RESET"
   printf '      - Zone / Zone / Read
 '
@@ -819,19 +822,19 @@ show_cloudflare_token_help() {
 '
   printf '      - Account / Cloudflare Tunnel / Edit
 '
-  printf '  %s• نکته مهم / Important:%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی.
+  printf '  %s• نکته مهم / Important / 重要说明：%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی / The token must have access to the same account and domain you enter below / 该令牌必须能访问下面填写的同一账户和域名。
 
 ' "$C_YELLOW" "$C_RESET"
 }
 
 show_domain_help() {
-  printf '%s%s🌐 دامنه اصلی / Domain%s
+  printf '%s%s🌐 دامنه اصلی / Domain / 根域名%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چه چیزی وارد شود / What to enter:%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است.
+  printf '  %s• چه چیزی وارد شود / What to enter / 输入什么：%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است / Enter the root domain already added to Cloudflare / 输入已经添加到 Cloudflare 的根域名。
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نمونه درست / Correct example:%s example.com
+  printf '  %s• نمونه درست / Correct example / 正确示例：%s example.com
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• وارد نکن / Do not enter:%s https://example.com ، sub.example.com ، example.com/test
+  printf '  %s• وارد نکن / Do not enter / 不要输入：%s https://example.com ، sub.example.com ، example.com/test
 
 ' "$C_YELLOW" "$C_RESET"
 }
@@ -897,7 +900,7 @@ validate_bot_token_once() {
   VALIDATION_SUCCESS=""
   VALIDATION_INVALID_FIELD=""
   if [[ -z "${BOT_TOKEN:-}" ]]; then
-    VALIDATION_ERROR='Telegram bot token is empty.'
+    VALIDATION_ERROR='Telegram bot token is empty / Telegram 机器人令牌为空。'
     VALIDATION_INVALID_FIELD='bot_token'
     return 1
   fi
@@ -932,11 +935,11 @@ validate_bot_token_once() {
   username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   if [[ -n "$username" ]]; then
-    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot username: @${username}"
+    VALIDATION_SUCCESS="This Telegram bot token is correct / Telegram 机器人令牌正确。 Bot username: @${username}"
   elif [[ -n "$first_name" ]]; then
-    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot name: ${first_name}"
+    VALIDATION_SUCCESS="This Telegram bot token is correct / Telegram 机器人令牌正确。 Bot name: ${first_name}"
   else
-    VALIDATION_SUCCESS='This Telegram bot token is correct.'
+    VALIDATION_SUCCESS='This Telegram bot token is correct / Telegram 机器人令牌正确。'
   fi
   return 0
 }
@@ -945,7 +948,7 @@ prompt_for_bot_token() {
   local rc
   while true; do
     show_bot_token_help
-    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token: ' BOT_TOKEN_INPUT
+    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token / Telegram 机器人令牌: ' BOT_TOKEN_INPUT
     BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
     validate_bot_token_once
     rc=$?
@@ -976,7 +979,7 @@ validate_cloudflare_inputs_once() {
     return 0
   fi
   if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-    VALIDATION_ERROR='Cloudflare API token is empty.'
+    VALIDATION_ERROR='Cloudflare API token is empty / Cloudflare API 令牌为空。'
     VALIDATION_INVALID_FIELD='cloudflare_token'
     return 1
   fi
@@ -1097,13 +1100,13 @@ print('yes' if data.get('success') else 'no')
 PY2
 )"
   if [[ "$tunnel_ok" != 'yes' ]]; then
-    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission.'
+    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission / 这个 Cloudflare API 令牌可以访问域名区域，但没有 Cloudflare Tunnel 权限。'
     VALIDATION_INVALID_FIELD='cloudflare_token'
     return 1
   fi
   status_note "Cloudflare API: access OK for ${domain}"
   CLOUDFLARE_ENABLED='true'
-  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct. Zone: ${domain}"
+  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct / Cloudflare API 令牌和域名正确。Zone: ${domain}"
   return 0
 }
 
@@ -1112,17 +1115,17 @@ prompt_for_cloudflare_inputs() {
   while true; do
     show_cloudflare_token_help
     if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT
+      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token / Cloudflare API 令牌: ' CLOUDFLARE_API_TOKEN_INPUT
       CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
     else
-      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below.\n'
+      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below / 当前 Cloudflare API 令牌已设置，将与下面的域名一起验证。\n'
     fi
     show_domain_help
     if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
-      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains: ' CLOUDFLARE_DOMAIN_NAME_INPUT
+      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains / 子域名根域名: ' CLOUDFLARE_DOMAIN_NAME_INPUT
       CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
     else
-      printf 'دامنه فعلی / Current domain is: %s\n' "$CLOUDFLARE_DOMAIN_NAME"
+      printf 'دامنه فعلی / Current domain / 当前域名：%s\n' "$CLOUDFLARE_DOMAIN_NAME"
     fi
     validate_cloudflare_inputs_once
     rc=$?
@@ -1141,7 +1144,7 @@ prompt_for_cloudflare_inputs() {
         CLOUDFLARE_DOMAIN_NAME=''
         ;;
       cloudflare_token)
-        echo 'Please create or copy the Cloudflare API token again, then paste it here.'
+        echo 'Please create or copy the Cloudflare API token again, then paste it here / 请重新创建或复制 Cloudflare API 令牌，然后粘贴到这里。'
         CLOUDFLARE_API_TOKEN=''
         ;;
       *)
@@ -1348,27 +1351,27 @@ telegram_bot_enabled() {
 }
 
 show_bot_token_help() {
-  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token%s
+  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token / Telegram 机器人令牌%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چیزی که لازم داری / What you need:%s توکن HTTP API ربات تلگرام.
+  printf '  %s• چیزی که لازم داری / What you need / 你需要什么：%s توکن HTTP API ربات تلگرام / Telegram HTTP API bot token / Telegram 机器人 HTTP API 令牌。
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token.%s
+  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token. / 从哪里获取：打开 Telegram，联系 BotFather，运行 /newbot（或打开已有机器人），然后复制令牌。%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نمونه درست / Correct format example:%s 123456789:AAExampleTokenValue
+  printf '  %s• نمونه درست / Correct format example / 正确格式示例：%s 123456789:AAExampleTokenValue
 
 ' "$C_YELLOW" "$C_RESET"
 }
 
 show_cloudflare_token_help() {
-  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token%s
+  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token / Cloudflare API 令牌%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key.%s
+  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key. / 你需要什么：需要的是 Cloudflare API 令牌，不是 Global API Key。%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• از کجا بگیری / Where to get it: Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
+  printf '  %s• از کجا بگیری / Where to get it / 从哪里获取：Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نوع پیشنهادی / Recommended type:%s Custom Token
+  printf '  %s• نوع پیشنهادی / Recommended type / 推荐类型：%s Custom Token
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• دسترسی‌های لازم / Required permissions:%s
+  printf '  %s• دسترسی‌های لازم / Required permissions / 所需权限：%s
 ' "$C_YELLOW" "$C_RESET"
   printf '      - Zone / Zone / Read
 '
@@ -1376,19 +1379,19 @@ show_cloudflare_token_help() {
 '
   printf '      - Account / Cloudflare Tunnel / Edit
 '
-  printf '  %s• نکته مهم / Important:%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی.
+  printf '  %s• نکته مهم / Important / 重要说明：%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی / The token must have access to the same account and domain you enter below / 该令牌必须能访问下面填写的同一账户和域名。
 
 ' "$C_YELLOW" "$C_RESET"
 }
 
 show_domain_help() {
-  printf '%s%s🌐 دامنه اصلی / Domain%s
+  printf '%s%s🌐 دامنه اصلی / Domain / 根域名%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
-  printf '  %s• چه چیزی وارد شود / What to enter:%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است.
+  printf '  %s• چه چیزی وارد شود / What to enter / 输入什么：%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است / Enter the root domain already added to Cloudflare / 输入已经添加到 Cloudflare 的根域名。
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• نمونه درست / Correct example:%s example.com
+  printf '  %s• نمونه درست / Correct example / 正确示例：%s example.com
 ' "$C_YELLOW" "$C_RESET"
-  printf '  %s• وارد نکن / Do not enter:%s https://example.com ، sub.example.com ، example.com/test
+  printf '  %s• وارد نکن / Do not enter / 不要输入：%s https://example.com ، sub.example.com ، example.com/test
 
 ' "$C_YELLOW" "$C_RESET"
 }
@@ -1454,7 +1457,7 @@ validate_bot_token_once() {
   VALIDATION_SUCCESS=""
   VALIDATION_INVALID_FIELD=""
   if [[ -z "${BOT_TOKEN:-}" ]]; then
-    VALIDATION_ERROR='Telegram bot token is empty.'
+    VALIDATION_ERROR='Telegram bot token is empty / Telegram 机器人令牌为空。'
     VALIDATION_INVALID_FIELD='bot_token'
     return 1
   fi
@@ -1489,11 +1492,11 @@ validate_bot_token_once() {
   username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   if [[ -n "$username" ]]; then
-    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot username: @${username}"
+    VALIDATION_SUCCESS="This Telegram bot token is correct / Telegram 机器人令牌正确。 Bot username: @${username}"
   elif [[ -n "$first_name" ]]; then
-    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot name: ${first_name}"
+    VALIDATION_SUCCESS="This Telegram bot token is correct / Telegram 机器人令牌正确。 Bot name: ${first_name}"
   else
-    VALIDATION_SUCCESS='This Telegram bot token is correct.'
+    VALIDATION_SUCCESS='This Telegram bot token is correct / Telegram 机器人令牌正确。'
   fi
   return 0
 }
@@ -1502,7 +1505,7 @@ prompt_for_bot_token() {
   local rc
   while true; do
     show_bot_token_help
-    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token: ' BOT_TOKEN_INPUT
+    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token / Telegram 机器人令牌: ' BOT_TOKEN_INPUT
     BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
     validate_bot_token_once
     rc=$?
@@ -1533,7 +1536,7 @@ validate_cloudflare_inputs_once() {
     return 0
   fi
   if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-    VALIDATION_ERROR='Cloudflare API token is empty.'
+    VALIDATION_ERROR='Cloudflare API token is empty / Cloudflare API 令牌为空。'
     VALIDATION_INVALID_FIELD='cloudflare_token'
     return 1
   fi
@@ -1654,13 +1657,13 @@ print('yes' if data.get('success') else 'no')
 PY2
 )"
   if [[ "$tunnel_ok" != 'yes' ]]; then
-    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission.'
+    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission / 这个 Cloudflare API 令牌可以访问域名区域，但没有 Cloudflare Tunnel 权限。'
     VALIDATION_INVALID_FIELD='cloudflare_token'
     return 1
   fi
   status_note "Cloudflare API: access OK for ${domain}"
   CLOUDFLARE_ENABLED='true'
-  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct. Zone: ${domain}"
+  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct / Cloudflare API 令牌和域名正确。Zone: ${domain}"
   return 0
 }
 
@@ -1669,17 +1672,17 @@ prompt_for_cloudflare_inputs() {
   while true; do
     show_cloudflare_token_help
     if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT
+      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token / Cloudflare API 令牌: ' CLOUDFLARE_API_TOKEN_INPUT
       CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
     else
-      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below.\n'
+      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below / 当前 Cloudflare API 令牌已设置，将与下面的域名一起验证。\n'
     fi
     show_domain_help
     if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
-      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains: ' CLOUDFLARE_DOMAIN_NAME_INPUT
+      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains / 子域名根域名: ' CLOUDFLARE_DOMAIN_NAME_INPUT
       CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
     else
-      printf 'دامنه فعلی / Current domain is: %s\n' "$CLOUDFLARE_DOMAIN_NAME"
+      printf 'دامنه فعلی / Current domain / 当前域名：%s\n' "$CLOUDFLARE_DOMAIN_NAME"
     fi
     validate_cloudflare_inputs_once
     rc=$?
@@ -1698,7 +1701,7 @@ prompt_for_cloudflare_inputs() {
         CLOUDFLARE_DOMAIN_NAME=''
         ;;
       cloudflare_token)
-        echo 'Please create or copy the Cloudflare API token again, then paste it here.'
+        echo 'Please create or copy the Cloudflare API token again, then paste it here / 请重新创建或复制 Cloudflare API 令牌，然后粘贴到这里。'
         CLOUDFLARE_API_TOKEN=''
         ;;
       *)
@@ -2297,12 +2300,12 @@ download_xray_release_zip() {
   base_url="${XRAY_DOWNLOAD_BASE_URL:-https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}}"
   download_url="${base_url}/${asset_name}"
   digest_url="${base_url}/${asset_name}.dgst"
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.72" "$download_url" -o "$output_zip"; then
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.74" "$download_url" -o "$output_zip"; then
     set_fail_hint "Failed to download Xray archive"
     return 1
   fi
   digest_file="$(mktemp)"
-  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.72" "$digest_url" -o "$digest_file"; then
+  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.74" "$digest_url" -o "$digest_file"; then
     digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
     if [[ -n "$digest" ]]; then
       actual="$(sha256sum "$output_zip" | awk '{print $1}')"

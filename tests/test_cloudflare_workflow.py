@@ -107,7 +107,7 @@ class CloudflareWorkflowTests(unittest.TestCase):
             'warn_usage_percent': 80,
             'backup_interval_hours': 24,
             'backup_retention': 5,
-            'package_version': '0.1.72',
+            'package_version': '0.1.74',
             'cloudflare_enabled': True,
             'cloudflare_domain_name': 'example.com',
             'cloudflare_zone_name': 'example.com',
