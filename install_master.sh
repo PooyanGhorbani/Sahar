@@ -802,8 +802,10 @@ validate_bot_token() {
     return 0
   fi
 
-  payload="$(curl -sS --connect-timeout 10 --max-time 20 -w $'\n%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
+  status_note 'Telegram API: checking BOT_TOKEN over IPv4'
+  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -w $'\n%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
   if [[ -z "$payload" ]]; then
+    set_fail_hint 'Telegram API unreachable (check DNS, IPv4 egress, or CA certificates)'
     echo "ERROR: Could not reach the Telegram API to validate BOT_TOKEN."
     echo "Check outbound network access to api.telegram.org or rerun later."
     exit 1
@@ -859,8 +861,10 @@ validate_cloudflare_inputs() {
     echo 'Provide both values or leave both empty to skip Cloudflare automation.'
     exit 1
   fi
-  payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones?name=${domain}" 2>/dev/null || true)"
+  status_note "Cloudflare API: checking zone ${domain} over IPv4"
+  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones?name=${domain}" 2>/dev/null || true)"
   if [[ -z "$payload" ]]; then
+    set_fail_hint 'Cloudflare API unreachable (check DNS, IPv4 egress, or CA certificates)'
     echo 'ERROR: Could not reach the Cloudflare API to validate the zone.'
     echo 'Check outbound network access to api.cloudflare.com and rerun the installer.'
     exit 1
@@ -911,12 +915,14 @@ PY2
       ;;
     *)
       error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      set_fail_hint "Cloudflare validation failed for ${domain}: ${error_message}"
       echo "ERROR: Cloudflare validation failed (${http_code:-unknown}): ${error_message}"
       exit 1
       ;;
   esac
   if [[ -z "$account_id" ]]; then
-    payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones/${zone_id}" 2>/dev/null || true)"
+    status_note "Cloudflare API: resolving account id for ${domain}"
+    payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones/${zone_id}" 2>/dev/null || true)"
     response="${payload%$'\n'*}"
     account_id="$(python3 - "$response" <<'PY2'
 import json, sys
@@ -931,10 +937,12 @@ PY2
 )"
   fi
   if [[ -z "$account_id" ]]; then
+    set_fail_hint 'Cloudflare zone resolved, but account id is missing'
     echo 'ERROR: Cloudflare account id could not be resolved from the selected zone.'
     exit 1
   fi
-  payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" 2>/dev/null || true)"
+  status_note "Cloudflare API: checking Tunnel permission on account ${account_id}"
+  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" 2>/dev/null || true)"
   response="${payload%$'\n'*}"
   tunnel_ok="$(python3 - "$response" <<'PY2'
 import json, sys
@@ -948,10 +956,12 @@ print('yes' if data.get('success') else 'no')
 PY2
 )"
   if [[ "$tunnel_ok" != 'yes' ]]; then
+    set_fail_hint 'Cloudflare token can see the zone, but Tunnel permission is missing'
     echo 'ERROR: Cloudflare token is valid for the zone, but tunnel access is missing.'
     echo 'Grant Cloudflare Tunnel read/edit permissions on the same account and rerun the installer.'
     exit 1
   fi
+  status_note "Cloudflare API: access OK for ${domain}"
   CLOUDFLARE_ENABLED='true'
 }
 
