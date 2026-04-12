@@ -41,6 +41,9 @@ SPINNER_INDEX=0
 UI_TTY=0
 FAIL_HINT=""
 POST_INSTALL_WARNINGS=()
+VALIDATION_ERROR=""
+VALIDATION_SUCCESS=""
+VALIDATION_INVALID_FIELD=""
 C_RESET=""
 C_BOLD=""
 C_DIM=""
@@ -193,9 +196,9 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sOnly three values are requested: Telegram bot token, Cloudflare API token and domain.%s
+  printf '%sفقط سه مقدار لازم است / Only three values are requested: Telegram bot token, Cloudflare API token and domain.%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '%sCloudflare tunnel and DNS are configured automatically when those values are provided.%s
+  printf '%sبقیه کارها خودکار انجام می‌شود / Cloudflare tunnel and DNS are configured automatically when those values are provided.%s
 ' "$C_DIM" "$C_RESET"
 }
 ui_newline() {
@@ -745,6 +748,369 @@ telegram_bot_enabled() {
   [[ -n "${BOT_TOKEN:-}" ]]
 }
 
+show_bot_token_help() {
+  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چیزی که لازم داری / What you need:%s توکن HTTP API ربات تلگرام.
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نمونه درست / Correct format example:%s 123456789:AAExampleTokenValue
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+show_cloudflare_token_help() {
+  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• از کجا بگیری / Where to get it: Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نوع پیشنهادی / Recommended type:%s Custom Token
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• دسترسی‌های لازم / Required permissions:%s
+' "$C_YELLOW" "$C_RESET"
+  printf '      - Zone / Zone / Read
+'
+  printf '      - Zone / DNS / Edit
+'
+  printf '      - Account / Cloudflare Tunnel / Edit
+'
+  printf '  %s• نکته مهم / Important:%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی.
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+show_domain_help() {
+  printf '%s%s🌐 دامنه اصلی / Domain%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چه چیزی وارد شود / What to enter:%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است.
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نمونه درست / Correct example:%s example.com
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• وارد نکن / Do not enter:%s https://example.com ، sub.example.com ، example.com/test
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+read_visible_input() {
+  local prompt="$1"
+  local result_var="$2"
+  local value=""
+  if (( UI_TTY )); then
+    printf ' %s%s%s' "$C_BOLD$C_GREEN" "$prompt" "$C_RESET"
+    read -r value || true
+  else
+    read -r -p "${prompt}" value || true
+  fi
+  printf -v "$result_var" '%s' "$value"
+}
+
+normalize_domain_value() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+domain_format_error() {
+  local domain
+  domain="$(normalize_domain_value "$1")"
+  if [[ -z "$domain" ]]; then
+    printf 'Domain cannot be empty.'
+    return 0
+  fi
+  if [[ "$domain" == *"://"* ]]; then
+    printf 'Use only the root domain, without http:// or https://.'
+    return 0
+  fi
+  if [[ "$domain" == */* ]]; then
+    printf 'Do not include any path. Use only the root domain, مثل example.com.'
+    return 0
+  fi
+  if [[ "$domain" == *"*"* ]]; then
+    printf 'Wildcard domains are not accepted here. Enter the root domain only.'
+    return 0
+  fi
+  if [[ "$domain" != *.* ]]; then
+    printf 'This does not look like a root domain. Example: example.com'
+    return 0
+  fi
+  if [[ ! "$domain" =~ ^[a-z0-9.-]+$ ]]; then
+    printf 'The domain contains invalid characters. Use letters, numbers, dots, and hyphens only.'
+    return 0
+  fi
+  if [[ "$domain" =~ ^[.-] || "$domain" =~ [.-]$ || "$domain" =~ \.\. || "$domain" =~ -- ]]; then
+    printf 'The domain format is not valid. Example: example.com'
+    return 0
+  fi
+  return 1
+}
+
+telegram_bot_enabled() {
+  [[ -n "${BOT_TOKEN:-}" ]]
+}
+
+validate_bot_token_once() {
+  local payload response http_code description error_code username first_name
+  VALIDATION_ERROR=""
+  VALIDATION_SUCCESS=""
+  VALIDATION_INVALID_FIELD=""
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    VALIDATION_ERROR='Telegram bot token is empty.'
+    VALIDATION_INVALID_FIELD='bot_token'
+    return 1
+  fi
+
+  status_note 'Telegram API: checking BOT_TOKEN over IPv4'
+  payload="$(api_json_get_ipv4 "https://api.telegram.org/bot${BOT_TOKEN}/getMe")"
+  if [[ -z "$payload" ]]; then
+    set_fail_hint 'Telegram API unreachable (check DNS, IPv4 egress, or CA certificates)'
+    VALIDATION_ERROR='The server could not reach api.telegram.org, so the bot token could not be verified right now.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
+  if [[ -z "$response" ]]; then
+    VALIDATION_ERROR='Telegram API returned an empty response. This usually means DNS/TLS/egress trouble or a timed out request.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+
+  if ! printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    description="$(printf '%s' "$response" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    error_code="$(printf '%s' "$response" | sed -n 's/.*"error_code"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+    description="${description:-unknown Telegram API error}"
+    error_code="${error_code:-${http_code:-unknown}}"
+    VALIDATION_ERROR="This is not a valid Telegram bot token (${error_code}: ${description})."
+    VALIDATION_INVALID_FIELD='bot_token'
+    return 1
+  fi
+
+  username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -n "$username" ]]; then
+    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot username: @${username}"
+  elif [[ -n "$first_name" ]]; then
+    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot name: ${first_name}"
+  else
+    VALIDATION_SUCCESS='This Telegram bot token is correct.'
+  fi
+  return 0
+}
+
+prompt_for_bot_token() {
+  local rc
+  while true; do
+    show_bot_token_help
+    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token: ' BOT_TOKEN_INPUT
+    BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+    validate_bot_token_once
+    rc=$?
+    if (( rc == 0 )); then
+      printf '✓ %s\n\n' "$VALIDATION_SUCCESS"
+      return 0
+    fi
+    if (( rc == 2 )); then
+      echo "ERROR: $VALIDATION_ERROR"
+      return 1
+    fi
+    printf '✗ %s\n' "$VALIDATION_ERROR"
+    echo 'Please copy the token again from BotFather and try once more.'
+    echo
+  done
+}
+
+validate_cloudflare_inputs_once() {
+  local payload response http_code domain zone_id account_id tunnel_ok error_message
+  VALIDATION_ERROR=""
+  VALIDATION_SUCCESS=""
+  VALIDATION_INVALID_FIELD=""
+  domain="$(normalize_domain_value "${CLOUDFLARE_DOMAIN_NAME:-}")"
+  CLOUDFLARE_DOMAIN_NAME="$domain"
+  if [[ -z "$domain" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    CLOUDFLARE_ENABLED='false'
+    VALIDATION_SUCCESS='Cloudflare automation is skipped.'
+    return 0
+  fi
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    VALIDATION_ERROR='Cloudflare API token is empty.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  if error_message="$(domain_format_error "$domain")"; then
+    VALIDATION_ERROR="$error_message"
+    VALIDATION_INVALID_FIELD='cloudflare_domain'
+    return 1
+  fi
+  status_note "Cloudflare API: checking zone ${domain} over IPv4"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones?name=${domain}" "${CLOUDFLARE_API_TOKEN}")"
+  if [[ -z "$payload" ]]; then
+    set_fail_hint 'Cloudflare API unreachable (check DNS, IPv4 egress, or CA certificates)'
+    VALIDATION_ERROR='The server could not reach api.cloudflare.com, so the Cloudflare values could not be verified right now.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
+  if [[ -z "$response" ]]; then
+    VALIDATION_ERROR='Cloudflare API returned an empty response. This usually means DNS/TLS/egress trouble or a timed out request.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+  mapfile -t cf_parts < <(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('json_error')
+    print('invalid JSON from Cloudflare API')
+    print('')
+    print('')
+    raise SystemExit(0)
+if not data.get('success'):
+    errors = data.get('errors') or []
+    msg = '; '.join(str(item.get('message') or item) for item in errors) or 'unknown Cloudflare API error'
+    print('api_error')
+    print(msg)
+    print('')
+    print('')
+    raise SystemExit(0)
+rows = data.get('result') or []
+if not rows:
+    print('zone_missing')
+    print('domain not found in Cloudflare account')
+    print('')
+    print('')
+    raise SystemExit(0)
+row = rows[0]
+print('ok')
+print(row.get('id') or '')
+print(((row.get('account') or {}).get('id')) or '')
+print('')
+PY2
+)
+  case "${cf_parts[0]:-json_error}" in
+    ok)
+      zone_id="${cf_parts[1]:-}"
+      account_id="${cf_parts[2]:-}"
+      ;;
+    zone_missing)
+      VALIDATION_ERROR='This domain was not found in the Cloudflare account behind the provided API token.'
+      VALIDATION_INVALID_FIELD='cloudflare_domain'
+      return 1
+      ;;
+    api_error)
+      error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      if printf '%s' "$error_message" | grep -Eqi 'auth|token|permission|forbidden|unauthorized'; then
+        VALIDATION_INVALID_FIELD='cloudflare_token'
+        VALIDATION_ERROR="This Cloudflare API token is not correct for this request: ${error_message}"
+      else
+        VALIDATION_INVALID_FIELD='cloudflare_token'
+        VALIDATION_ERROR="Cloudflare rejected the API token or request: ${error_message}"
+      fi
+      return 1
+      ;;
+    *)
+      error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      VALIDATION_INVALID_FIELD='cloudflare_token'
+      VALIDATION_ERROR="Cloudflare validation failed (${http_code:-unknown}): ${error_message}"
+      return 1
+      ;;
+  esac
+  if [[ -z "$account_id" ]]; then
+    status_note "Cloudflare API: resolving account id for ${domain}"
+    payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones/${zone_id}" "${CLOUDFLARE_API_TOKEN}")"
+    response="${payload%$'\n'*}"
+    account_id="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('')
+    raise SystemExit(0)
+print((((data.get('result') or {}).get('account') or {}).get('id')) or '')
+PY2
+)"
+  fi
+  if [[ -z "$account_id" ]]; then
+    VALIDATION_ERROR='Cloudflare zone resolved, but the account id is missing.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  status_note "Cloudflare API: checking Tunnel permission on account ${account_id}"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" "${CLOUDFLARE_API_TOKEN}")"
+  response="${payload%$'\n'*}"
+  tunnel_ok="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('no')
+    raise SystemExit(0)
+print('yes' if data.get('success') else 'no')
+PY2
+)"
+  if [[ "$tunnel_ok" != 'yes' ]]; then
+    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  status_note "Cloudflare API: access OK for ${domain}"
+  CLOUDFLARE_ENABLED='true'
+  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct. Zone: ${domain}"
+  return 0
+}
+
+prompt_for_cloudflare_inputs() {
+  local rc
+  while true; do
+    show_cloudflare_token_help
+    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT
+      CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
+    else
+      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below.\n'
+    fi
+    show_domain_help
+    if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains: ' CLOUDFLARE_DOMAIN_NAME_INPUT
+      CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
+    else
+      printf 'دامنه فعلی / Current domain is: %s\n' "$CLOUDFLARE_DOMAIN_NAME"
+    fi
+    validate_cloudflare_inputs_once
+    rc=$?
+    if (( rc == 0 )); then
+      printf '✓ %s\n\n' "$VALIDATION_SUCCESS"
+      return 0
+    fi
+    if (( rc == 2 )); then
+      echo "ERROR: $VALIDATION_ERROR"
+      return 1
+    fi
+    printf '✗ %s\n' "$VALIDATION_ERROR"
+    case "$VALIDATION_INVALID_FIELD" in
+      cloudflare_domain)
+        echo 'Please enter the root domain again. Example: example.com'
+        CLOUDFLARE_DOMAIN_NAME=''
+        ;;
+      cloudflare_token)
+        echo 'Please create or copy the Cloudflare API token again, then paste it here.'
+        CLOUDFLARE_API_TOKEN=''
+        ;;
+      *)
+        CLOUDFLARE_API_TOKEN=''
+        CLOUDFLARE_DOMAIN_NAME=''
+        ;;
+    esac
+    echo
+  done
+}
+
 prompt_for_install_inputs() {
   if [[ ! -t 0 ]]; then
     return 0
@@ -753,42 +1119,47 @@ prompt_for_install_inputs() {
     return 0
   fi
   if (( UI_TTY )); then
-    printf '[H[2J'
+    printf '\033[H\033[2J'
     printf '%s%sAutomatic setup%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
 ' "$C_DIM" "$C_RESET"
-    printf ' Only three values are needed. Cloudflare tunnel and DNS will be configured automatically.
-'
-    printf ' Input is visible while typing so you can verify tokens and domain before validation starts.
-'
-    printf ' The first private chat that sends /start becomes owner automatically.
+  fi
+  cat <<'EOF'
+فقط سه مقدار لازم است.
+Only three values are needed.
 
-'
-  fi
+نصاب هر مقدار را همان لحظه بررسی می‌کند و می‌گوید درست است یا نه.
+The installer will verify each one and tell you if it is correct.
+
+بعد از آن، ساخت Tunnel و تنظیم DNS کلودفلر خودکار انجام می‌شود.
+After that, Cloudflare tunnel and DNS are configured automatically.
+
+اولین چت خصوصی که /start بفرستد، خودکار Owner می‌شود.
+The first private chat that sends /start becomes owner automatically.
+
+EOF
   if [[ -z "${BOT_TOKEN:-}" ]]; then
-    if (( UI_TTY )); then
-      read -r -p ' 🤖 Telegram bot token (visible, example: 123456:ABCDEF...): ' BOT_TOKEN_INPUT || true
-    else
-      read -r -p 'Telegram bot token (visible, example: 123456:ABCDEF...): ' BOT_TOKEN_INPUT || true
-    fi
-    BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+    prompt_for_bot_token || exit 1
+  else
+    validate_bot_token_once
+    case $? in
+      0) printf '✓ %s\n\n' "$VALIDATION_SUCCESS" ;;
+      2) echo "ERROR: $VALIDATION_ERROR"; exit 1 ;;
+      *) echo "ERROR: $VALIDATION_ERROR"; BOT_TOKEN=''; prompt_for_bot_token || exit 1 ;;
+    esac
   fi
-  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-    if (( UI_TTY )); then
-      read -r -p ' ☁️  Cloudflare API token (visible): ' CLOUDFLARE_API_TOKEN_INPUT || true
-    else
-      read -r -p 'Cloudflare API token (visible): ' CLOUDFLARE_API_TOKEN_INPUT || true
-    fi
-    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
-  fi
-  if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
-    if (( UI_TTY )); then
-      read -r -p ' 🌐 Domain for subdomains (visible, example: example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
-    else
-      read -r -p 'Domain for subdomains (visible, example: example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
-    fi
-    CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-}"
+    prompt_for_cloudflare_inputs || exit 1
+  else
+    validate_cloudflare_inputs_once
+    case $? in
+      0) printf '✓ %s\n\n' "$VALIDATION_SUCCESS" ;;
+      2) echo "ERROR: $VALIDATION_ERROR"; exit 1 ;;
+      *) echo "ERROR: $VALIDATION_ERROR"; CLOUDFLARE_API_TOKEN=''; CLOUDFLARE_DOMAIN_NAME=''; prompt_for_cloudflare_inputs || exit 1 ;;
+    esac
   fi
   CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
   CURRENT_LABEL="Installer inputs captured"
@@ -797,45 +1168,22 @@ prompt_for_install_inputs() {
 }
 
 validate_bot_token() {
-  local payload response http_code description error_code username first_name
+  local rc
   if [[ -z "${BOT_TOKEN:-}" ]]; then
     return 0
   fi
-
-  status_note 'Telegram API: checking BOT_TOKEN over IPv4'
-  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -w $'\n%{http_code}' "https://api.telegram.org/bot${BOT_TOKEN}/getMe" 2>/dev/null || true)"
-  if [[ -z "$payload" ]]; then
-    set_fail_hint 'Telegram API unreachable (check DNS, IPv4 egress, or CA certificates)'
-    echo "ERROR: Could not reach the Telegram API to validate BOT_TOKEN."
-    echo "Check outbound network access to api.telegram.org or rerun later."
+  validate_bot_token_once
+  rc=$?
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if (( rc == 2 )); then
+    echo "ERROR: $VALIDATION_ERROR"
+    echo 'Check outbound network access to api.telegram.org or rerun later.'
     exit 1
   fi
-
-  http_code="${payload##*$'\n'}"
-  response="${payload%$'\n'*}"
-  if [[ -z "$response" ]]; then
-    echo "ERROR: Telegram API returned an empty response while validating BOT_TOKEN."
-    exit 1
-  fi
-
-  if ! printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
-    description="$(printf '%s' "$response" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-    error_code="$(printf '%s' "$response" | sed -n 's/.*"error_code"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
-    description="${description:-unknown Telegram API error}"
-    error_code="${error_code:-${http_code:-unknown}}"
-    echo "ERROR: BOT_TOKEN validation failed (${error_code}): ${description}"
-    exit 1
-  fi
-
-  username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-  if [[ -n "$username" ]]; then
-    :
-  elif [[ -n "$first_name" ]]; then
-    :
-  else
-    :
-  fi
+  echo "ERROR: $VALIDATION_ERROR"
+  exit 1
 }
 
 prepare_install_inputs() {
@@ -846,6 +1194,577 @@ prepare_install_inputs() {
   load_saved_bot_token
   load_saved_cloudflare_inputs
   prompt_for_install_inputs
+}
+
+api_json_get_ipv4() {
+  local url="$1"
+  local bearer_token="${2:-}"
+  local payload
+  local -a args
+  args=(-4 -sS --connect-timeout 5 --max-time 12 --retry 0 -H 'Content-Type: application/json' -w $'
+%{http_code}')
+  if [[ -n "$bearer_token" ]]; then
+    args+=(-H "Authorization: Bearer ${bearer_token}")
+  fi
+  payload="$(run_with_timeout 20 curl "${args[@]}" "$url" 2>/dev/null || true)"
+  printf '%s' "$payload"
+}
+
+validate_cloudflare_inputs() {
+  local rc
+  validate_cloudflare_inputs_once
+  rc=$?
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if (( rc == 2 )); then
+    echo "ERROR: $VALIDATION_ERROR"
+    echo 'Check outbound network access to api.cloudflare.com and rerun the installer.'
+    exit 1
+  fi
+  echo "ERROR: $VALIDATION_ERROR"
+  exit 1
+}
+
+init_config_defaults() {
+  local detected_public_ip cf_requested
+  BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+  ADMIN_CHAT_IDS="${ADMIN_CHAT_IDS:-${SAHAR_ADMIN_CHAT_IDS:-}}"
+  SCHEDULER_INTERVAL="${SCHEDULER_INTERVAL:-300}"
+  AGENT_TIMEOUT="${AGENT_TIMEOUT:-15}"
+  WARN_DAYS_LEFT="${WARN_DAYS_LEFT:-3}"
+  WARN_USAGE_PERCENT="${WARN_USAGE_PERCENT:-80}"
+  BACKUP_INTERVAL_HOURS="${BACKUP_INTERVAL_HOURS:-24}"
+  BACKUP_RETENTION="${BACKUP_RETENTION:-10}"
+  SUBSCRIPTION_BIND_HOST="${SUBSCRIPTION_BIND_HOST:-0.0.0.0}"
+  SUBSCRIPTION_BIND_PORT="${SUBSCRIPTION_BIND_PORT:-8090}"
+  detected_public_ip="$(detect_public_ipv4 || true)"
+  SUBSCRIPTION_BASE_URL="${SUBSCRIPTION_BASE_URL:-}"
+  if [[ -z "$SUBSCRIPTION_BASE_URL" && -n "$detected_public_ip" ]]; then
+    SUBSCRIPTION_BASE_URL="http://${detected_public_ip}:${SUBSCRIPTION_BIND_PORT}"
+  fi
+
+  CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-}"
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
+  CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+  cf_requested='false'
+  if [[ -n "$CLOUDFLARE_API_TOKEN" || -n "$CLOUDFLARE_DOMAIN_NAME" ]]; then
+    cf_requested='true'
+  fi
+  CLOUDFLARE_ENABLED="$(parse_bool "${CLOUDFLARE_ENABLED:-$cf_requested}")"
+  if [[ "$CLOUDFLARE_ENABLED" != "true" ]]; then
+    CLOUDFLARE_DOMAIN_NAME=""
+    CLOUDFLARE_BASE_SUBDOMAIN=""
+    CLOUDFLARE_API_TOKEN=""
+  fi
+  CLOUDFLARE_TOKEN_ENCRYPTION_KEY="${CLOUDFLARE_TOKEN_ENCRYPTION_KEY:-$(python3 - <<'PY2'
+import os, base64
+print(base64.urlsafe_b64encode(os.urandom(32)).decode())
+PY2
+)}"
+
+  LOCAL_NODE_ENABLED="$(parse_bool "${LOCAL_NODE_ENABLED:-true}")"
+  LOCAL_SERVER_NAME="${LOCAL_SERVER_NAME:-local}"
+  LOCAL_AGENT_LISTEN_HOST="${LOCAL_AGENT_LISTEN_HOST:-127.0.0.1}"
+  LOCAL_AGENT_LISTEN_PORT="${LOCAL_AGENT_LISTEN_PORT:-8787}"
+  LOCAL_TRANSPORT_MODE="ws"
+  LOCAL_WS_PATH="${LOCAL_WS_PATH:-/ws}"
+  LOCAL_REALITY_SERVER_NAME="${LOCAL_REALITY_SERVER_NAME:-www.cloudflare.com}"
+  LOCAL_REALITY_DEST="${LOCAL_REALITY_DEST:-${LOCAL_REALITY_SERVER_NAME}:443}"
+  LOCAL_FINGERPRINT="${LOCAL_FINGERPRINT:-chrome}"
+  LOCAL_XRAY_PORT="${LOCAL_XRAY_PORT:-443}"
+  LOCAL_REALITY_PORT="${LOCAL_REALITY_PORT:-8443}"
+  LOCAL_XRAY_API_PORT="${LOCAL_XRAY_API_PORT:-10085}"
+  LOCAL_AGENT_API_TOKEN="${LOCAL_AGENT_API_TOKEN:-}"
+  LOCAL_AGENT_API_URL=""
+  LOCAL_PUBLIC_HOST="$(first_nonempty "${LOCAL_PUBLIC_HOST:-}" "$detected_public_ip" "$(hostname -f 2>/dev/null || true)" "$(hostname 2>/dev/null || true)" || true)"
+  LOCAL_HOST_MODE="${LOCAL_HOST_MODE:-$(infer_host_mode "$LOCAL_PUBLIC_HOST")}"
+
+  if [[ "$LOCAL_NODE_ENABLED" == "true" ]]; then
+    if [[ -z "$LOCAL_AGENT_API_TOKEN" ]]; then
+      LOCAL_AGENT_API_TOKEN="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)"
+    fi
+    LOCAL_AGENT_API_URL="http://127.0.0.1:${LOCAL_AGENT_LISTEN_PORT}"
+    if [[ "$LOCAL_HOST_MODE" == "domain" && -n "$LOCAL_PUBLIC_HOST" ]] && ! resolve_host_ready "$LOCAL_PUBLIC_HOST"; then
+      echo "Warning: local node domain does not resolve yet: $LOCAL_PUBLIC_HOST"
+    fi
+  else
+    LOCAL_SERVER_NAME="local"
+    LOCAL_AGENT_API_URL=""
+    LOCAL_AGENT_API_TOKEN=""
+    LOCAL_PUBLIC_HOST=""
+    LOCAL_HOST_MODE=""
+  fi
+}
+
+telegram_bot_enabled() {
+  [[ -n "${BOT_TOKEN:-}" ]]
+}
+
+show_bot_token_help() {
+  printf '%s%s📌 توکن ربات تلگرام / Telegram bot token%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چیزی که لازم داری / What you need:%s توکن HTTP API ربات تلگرام.
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• از کجا بگیری / Where to get it: open Telegram, chat with BotFather, run /newbot (or open your existing bot), then copy the token.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نمونه درست / Correct format example:%s 123456789:AAExampleTokenValue
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+show_cloudflare_token_help() {
+  printf '%s%s☁️  توکن API کلودفلر / Cloudflare API token%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چیزی که لازم داری / What you need: a Cloudflare API token, not the Global API Key.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• از کجا بگیری / Where to get it: Cloudflare Dashboard → My Profile → API Tokens → Create Token.%s
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نوع پیشنهادی / Recommended type:%s Custom Token
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• دسترسی‌های لازم / Required permissions:%s
+' "$C_YELLOW" "$C_RESET"
+  printf '      - Zone / Zone / Read
+'
+  printf '      - Zone / DNS / Edit
+'
+  printf '      - Account / Cloudflare Tunnel / Edit
+'
+  printf '  %s• نکته مهم / Important:%s توکن باید به همان اکانت و دامنه‌ای دسترسی داشته باشد که پایین وارد می‌کنی.
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+show_domain_help() {
+  printf '%s%s🌐 دامنه اصلی / Domain%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '  %s• چه چیزی وارد شود / What to enter:%s دامنه اصلی که از قبل داخل Cloudflare اضافه شده است.
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• نمونه درست / Correct example:%s example.com
+' "$C_YELLOW" "$C_RESET"
+  printf '  %s• وارد نکن / Do not enter:%s https://example.com ، sub.example.com ، example.com/test
+
+' "$C_YELLOW" "$C_RESET"
+}
+
+read_visible_input() {
+  local prompt="$1"
+  local result_var="$2"
+  local value=""
+  if (( UI_TTY )); then
+    printf ' %s%s%s' "$C_BOLD$C_GREEN" "$prompt" "$C_RESET"
+    read -r value || true
+  else
+    read -r -p "${prompt}" value || true
+  fi
+  printf -v "$result_var" '%s' "$value"
+}
+
+normalize_domain_value() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+domain_format_error() {
+  local domain
+  domain="$(normalize_domain_value "$1")"
+  if [[ -z "$domain" ]]; then
+    printf 'Domain cannot be empty.'
+    return 0
+  fi
+  if [[ "$domain" == *"://"* ]]; then
+    printf 'Use only the root domain, without http:// or https://.'
+    return 0
+  fi
+  if [[ "$domain" == */* ]]; then
+    printf 'Do not include any path. Use only the root domain, مثل example.com.'
+    return 0
+  fi
+  if [[ "$domain" == *"*"* ]]; then
+    printf 'Wildcard domains are not accepted here. Enter the root domain only.'
+    return 0
+  fi
+  if [[ "$domain" != *.* ]]; then
+    printf 'This does not look like a root domain. Example: example.com'
+    return 0
+  fi
+  if [[ ! "$domain" =~ ^[a-z0-9.-]+$ ]]; then
+    printf 'The domain contains invalid characters. Use letters, numbers, dots, and hyphens only.'
+    return 0
+  fi
+  if [[ "$domain" =~ ^[.-] || "$domain" =~ [.-]$ || "$domain" =~ \.\. || "$domain" =~ -- ]]; then
+    printf 'The domain format is not valid. Example: example.com'
+    return 0
+  fi
+  return 1
+}
+
+telegram_bot_enabled() {
+  [[ -n "${BOT_TOKEN:-}" ]]
+}
+
+validate_bot_token_once() {
+  local payload response http_code description error_code username first_name
+  VALIDATION_ERROR=""
+  VALIDATION_SUCCESS=""
+  VALIDATION_INVALID_FIELD=""
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    VALIDATION_ERROR='Telegram bot token is empty.'
+    VALIDATION_INVALID_FIELD='bot_token'
+    return 1
+  fi
+
+  status_note 'Telegram API: checking BOT_TOKEN over IPv4'
+  payload="$(api_json_get_ipv4 "https://api.telegram.org/bot${BOT_TOKEN}/getMe")"
+  if [[ -z "$payload" ]]; then
+    set_fail_hint 'Telegram API unreachable (check DNS, IPv4 egress, or CA certificates)'
+    VALIDATION_ERROR='The server could not reach api.telegram.org, so the bot token could not be verified right now.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
+  if [[ -z "$response" ]]; then
+    VALIDATION_ERROR='Telegram API returned an empty response. This usually means DNS/TLS/egress trouble or a timed out request.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+
+  if ! printf '%s' "$response" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    description="$(printf '%s' "$response" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    error_code="$(printf '%s' "$response" | sed -n 's/.*"error_code"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1)"
+    description="${description:-unknown Telegram API error}"
+    error_code="${error_code:-${http_code:-unknown}}"
+    VALIDATION_ERROR="This is not a valid Telegram bot token (${error_code}: ${description})."
+    VALIDATION_INVALID_FIELD='bot_token'
+    return 1
+  fi
+
+  username="$(printf '%s' "$response" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  first_name="$(printf '%s' "$response" | sed -n 's/.*"first_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -n "$username" ]]; then
+    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot username: @${username}"
+  elif [[ -n "$first_name" ]]; then
+    VALIDATION_SUCCESS="This Telegram bot token is correct. Bot name: ${first_name}"
+  else
+    VALIDATION_SUCCESS='This Telegram bot token is correct.'
+  fi
+  return 0
+}
+
+prompt_for_bot_token() {
+  local rc
+  while true; do
+    show_bot_token_help
+    read_visible_input '🤖 توکن ربات تلگرام / Telegram bot token: ' BOT_TOKEN_INPUT
+    BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+    validate_bot_token_once
+    rc=$?
+    if (( rc == 0 )); then
+      printf '✓ %s\n\n' "$VALIDATION_SUCCESS"
+      return 0
+    fi
+    if (( rc == 2 )); then
+      echo "ERROR: $VALIDATION_ERROR"
+      return 1
+    fi
+    printf '✗ %s\n' "$VALIDATION_ERROR"
+    echo 'Please copy the token again from BotFather and try once more.'
+    echo
+  done
+}
+
+validate_cloudflare_inputs_once() {
+  local payload response http_code domain zone_id account_id tunnel_ok error_message
+  VALIDATION_ERROR=""
+  VALIDATION_SUCCESS=""
+  VALIDATION_INVALID_FIELD=""
+  domain="$(normalize_domain_value "${CLOUDFLARE_DOMAIN_NAME:-}")"
+  CLOUDFLARE_DOMAIN_NAME="$domain"
+  if [[ -z "$domain" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    CLOUDFLARE_ENABLED='false'
+    VALIDATION_SUCCESS='Cloudflare automation is skipped.'
+    return 0
+  fi
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    VALIDATION_ERROR='Cloudflare API token is empty.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  if error_message="$(domain_format_error "$domain")"; then
+    VALIDATION_ERROR="$error_message"
+    VALIDATION_INVALID_FIELD='cloudflare_domain'
+    return 1
+  fi
+  status_note "Cloudflare API: checking zone ${domain} over IPv4"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones?name=${domain}" "${CLOUDFLARE_API_TOKEN}")"
+  if [[ -z "$payload" ]]; then
+    set_fail_hint 'Cloudflare API unreachable (check DNS, IPv4 egress, or CA certificates)'
+    VALIDATION_ERROR='The server could not reach api.cloudflare.com, so the Cloudflare values could not be verified right now.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
+  if [[ -z "$response" ]]; then
+    VALIDATION_ERROR='Cloudflare API returned an empty response. This usually means DNS/TLS/egress trouble or a timed out request.'
+    VALIDATION_INVALID_FIELD='network'
+    return 2
+  fi
+  mapfile -t cf_parts < <(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('json_error')
+    print('invalid JSON from Cloudflare API')
+    print('')
+    print('')
+    raise SystemExit(0)
+if not data.get('success'):
+    errors = data.get('errors') or []
+    msg = '; '.join(str(item.get('message') or item) for item in errors) or 'unknown Cloudflare API error'
+    print('api_error')
+    print(msg)
+    print('')
+    print('')
+    raise SystemExit(0)
+rows = data.get('result') or []
+if not rows:
+    print('zone_missing')
+    print('domain not found in Cloudflare account')
+    print('')
+    print('')
+    raise SystemExit(0)
+row = rows[0]
+print('ok')
+print(row.get('id') or '')
+print(((row.get('account') or {}).get('id')) or '')
+print('')
+PY2
+)
+  case "${cf_parts[0]:-json_error}" in
+    ok)
+      zone_id="${cf_parts[1]:-}"
+      account_id="${cf_parts[2]:-}"
+      ;;
+    zone_missing)
+      VALIDATION_ERROR='This domain was not found in the Cloudflare account behind the provided API token.'
+      VALIDATION_INVALID_FIELD='cloudflare_domain'
+      return 1
+      ;;
+    api_error)
+      error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      if printf '%s' "$error_message" | grep -Eqi 'auth|token|permission|forbidden|unauthorized'; then
+        VALIDATION_INVALID_FIELD='cloudflare_token'
+        VALIDATION_ERROR="This Cloudflare API token is not correct for this request: ${error_message}"
+      else
+        VALIDATION_INVALID_FIELD='cloudflare_token'
+        VALIDATION_ERROR="Cloudflare rejected the API token or request: ${error_message}"
+      fi
+      return 1
+      ;;
+    *)
+      error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      VALIDATION_INVALID_FIELD='cloudflare_token'
+      VALIDATION_ERROR="Cloudflare validation failed (${http_code:-unknown}): ${error_message}"
+      return 1
+      ;;
+  esac
+  if [[ -z "$account_id" ]]; then
+    status_note "Cloudflare API: resolving account id for ${domain}"
+    payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones/${zone_id}" "${CLOUDFLARE_API_TOKEN}")"
+    response="${payload%$'\n'*}"
+    account_id="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('')
+    raise SystemExit(0)
+print((((data.get('result') or {}).get('account') or {}).get('id')) or '')
+PY2
+)"
+  fi
+  if [[ -z "$account_id" ]]; then
+    VALIDATION_ERROR='Cloudflare zone resolved, but the account id is missing.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  status_note "Cloudflare API: checking Tunnel permission on account ${account_id}"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" "${CLOUDFLARE_API_TOKEN}")"
+  response="${payload%$'\n'*}"
+  tunnel_ok="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('no')
+    raise SystemExit(0)
+print('yes' if data.get('success') else 'no')
+PY2
+)"
+  if [[ "$tunnel_ok" != 'yes' ]]; then
+    VALIDATION_ERROR='This Cloudflare API token can see the zone, but it does not have Cloudflare Tunnel permission.'
+    VALIDATION_INVALID_FIELD='cloudflare_token'
+    return 1
+  fi
+  status_note "Cloudflare API: access OK for ${domain}"
+  CLOUDFLARE_ENABLED='true'
+  VALIDATION_SUCCESS="This Cloudflare API token and domain are correct. Zone: ${domain}"
+  return 0
+}
+
+prompt_for_cloudflare_inputs() {
+  local rc
+  while true; do
+    show_cloudflare_token_help
+    if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+      read_visible_input '☁️  توکن API کلودفلر / Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT
+      CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
+    else
+      printf 'توکن فعلی کلودفلر ثبت شده است و با دامنه پایین بررسی می‌شود. / Current Cloudflare API token is set. It will be verified with the domain below.\n'
+    fi
+    show_domain_help
+    if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+      read_visible_input '🌐 دامنه اصلی / Root domain for subdomains: ' CLOUDFLARE_DOMAIN_NAME_INPUT
+      CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
+    else
+      printf 'دامنه فعلی / Current domain is: %s\n' "$CLOUDFLARE_DOMAIN_NAME"
+    fi
+    validate_cloudflare_inputs_once
+    rc=$?
+    if (( rc == 0 )); then
+      printf '✓ %s\n\n' "$VALIDATION_SUCCESS"
+      return 0
+    fi
+    if (( rc == 2 )); then
+      echo "ERROR: $VALIDATION_ERROR"
+      return 1
+    fi
+    printf '✗ %s\n' "$VALIDATION_ERROR"
+    case "$VALIDATION_INVALID_FIELD" in
+      cloudflare_domain)
+        echo 'Please enter the root domain again. Example: example.com'
+        CLOUDFLARE_DOMAIN_NAME=''
+        ;;
+      cloudflare_token)
+        echo 'Please create or copy the Cloudflare API token again, then paste it here.'
+        CLOUDFLARE_API_TOKEN=''
+        ;;
+      *)
+        CLOUDFLARE_API_TOKEN=''
+        CLOUDFLARE_DOMAIN_NAME=''
+        ;;
+    esac
+    echo
+  done
+}
+
+prompt_for_install_inputs() {
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+  if [[ -n "${BOT_TOKEN:-}" && -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+    return 0
+  fi
+  if (( UI_TTY )); then
+    printf '\033[H\033[2J'
+    printf '%s%sAutomatic setup%s
+' "$C_BOLD" "$C_CYAN" "$C_RESET"
+    printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
+' "$C_DIM" "$C_RESET"
+  fi
+  cat <<'EOF'
+فقط سه مقدار لازم است.
+Only three values are needed.
+
+نصاب هر مقدار را همان لحظه بررسی می‌کند و می‌گوید درست است یا نه.
+The installer will verify each one and tell you if it is correct.
+
+بعد از آن، ساخت Tunnel و تنظیم DNS کلودفلر خودکار انجام می‌شود.
+After that, Cloudflare tunnel and DNS are configured automatically.
+
+اولین چت خصوصی که /start بفرستد، خودکار Owner می‌شود.
+The first private chat that sends /start becomes owner automatically.
+
+EOF
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    prompt_for_bot_token || exit 1
+  else
+    validate_bot_token_once
+    case $? in
+      0) printf '✓ %s\n\n' "$VALIDATION_SUCCESS" ;;
+      2) echo "ERROR: $VALIDATION_ERROR"; exit 1 ;;
+      *) echo "ERROR: $VALIDATION_ERROR"; BOT_TOKEN=''; prompt_for_bot_token || exit 1 ;;
+    esac
+  fi
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-}"
+    prompt_for_cloudflare_inputs || exit 1
+  else
+    validate_cloudflare_inputs_once
+    case $? in
+      0) printf '✓ %s\n\n' "$VALIDATION_SUCCESS" ;;
+      2) echo "ERROR: $VALIDATION_ERROR"; exit 1 ;;
+      *) echo "ERROR: $VALIDATION_ERROR"; CLOUDFLARE_API_TOKEN=''; CLOUDFLARE_DOMAIN_NAME=''; prompt_for_cloudflare_inputs || exit 1 ;;
+    esac
+  fi
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
+  CURRENT_LABEL="Installer inputs captured"
+  CURRENT_STATUS="Ready"
+  draw_screen
+}
+
+validate_bot_token() {
+  local rc
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    return 0
+  fi
+  validate_bot_token_once
+  rc=$?
+  if (( rc == 0 )); then
+    return 0
+  fi
+  if (( rc == 2 )); then
+    echo "ERROR: $VALIDATION_ERROR"
+    echo 'Check outbound network access to api.telegram.org or rerun later.'
+    exit 1
+  fi
+  echo "ERROR: $VALIDATION_ERROR"
+  exit 1
+}
+
+prepare_install_inputs() {
+  BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+  CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-}}"
+  CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-${DOMAIN:-}}"
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
+  load_saved_bot_token
+  load_saved_cloudflare_inputs
+  prompt_for_install_inputs
+}
+
+api_json_get_ipv4() {
+  local url="$1"
+  local bearer_token="${2:-}"
+  local payload
+  local -a args
+  args=(-4 -sS --connect-timeout 5 --max-time 12 --retry 0 -H 'Content-Type: application/json' -w $'
+%{http_code}')
+  if [[ -n "$bearer_token" ]]; then
+    args+=(-H "Authorization: Bearer ${bearer_token}")
+  fi
+  payload="$(run_with_timeout 20 curl "${args[@]}" "$url" 2>/dev/null || true)"
+  printf '%s' "$payload"
 }
 
 validate_cloudflare_inputs() {
@@ -862,7 +1781,7 @@ validate_cloudflare_inputs() {
     exit 1
   fi
   status_note "Cloudflare API: checking zone ${domain} over IPv4"
-  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones?name=${domain}" 2>/dev/null || true)"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones?name=${domain}" "${CLOUDFLARE_API_TOKEN}")"
   if [[ -z "$payload" ]]; then
     set_fail_hint 'Cloudflare API unreachable (check DNS, IPv4 egress, or CA certificates)'
     echo 'ERROR: Could not reach the Cloudflare API to validate the zone.'
@@ -872,7 +1791,8 @@ validate_cloudflare_inputs() {
   http_code="${payload##*$'\n'}"
   response="${payload%$'\n'*}"
   if [[ -z "$response" ]]; then
-    echo 'ERROR: Cloudflare API returned an empty response while validating the zone.'
+    echo 'ERROR: Cloudflare API returned an empty response while validating the zone.
+This usually means DNS/TLS/egress trouble or a timed out request.'
     exit 1
   fi
   mapfile -t cf_parts < <(python3 - "$response" <<'PY2'
@@ -922,7 +1842,7 @@ PY2
   esac
   if [[ -z "$account_id" ]]; then
     status_note "Cloudflare API: resolving account id for ${domain}"
-    payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones/${zone_id}" 2>/dev/null || true)"
+    payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/zones/${zone_id}" "${CLOUDFLARE_API_TOKEN}")"
     response="${payload%$'\n'*}"
     account_id="$(python3 - "$response" <<'PY2'
 import json, sys
@@ -942,7 +1862,7 @@ PY2
     exit 1
   fi
   status_note "Cloudflare API: checking Tunnel permission on account ${account_id}"
-  payload="$(curl -4 -sS --connect-timeout 8 --max-time 15 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" 2>/dev/null || true)"
+  payload="$(api_json_get_ipv4 "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" "${CLOUDFLARE_API_TOKEN}")"
   response="${payload%$'\n'*}"
   tunnel_ok="$(python3 - "$response" <<'PY2'
 import json, sys

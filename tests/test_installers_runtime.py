@@ -144,12 +144,64 @@ class InstallerRuntimeTests(unittest.TestCase):
         self.assertIn("'cloudflare_tunnel_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true'", text)
         self.assertIn("'cloudflare_argo_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true'", text)
         self.assertIn('Cloudflare API token', text)
-        self.assertIn('Domain for subdomains', text)
-        self.assertIn('Input is visible while typing', text)
+        self.assertIn('Root domain for subdomains', text)
+        self.assertIn('The installer will verify each one and tell you if it is correct.', text)
         self.assertNotIn("read -rsp ' 🤖 Telegram BOT_TOKEN: '", text)
         self.assertNotIn("read -rsp ' ☁️  Cloudflare API token: '", text)
-        self.assertIn('Telegram bot token (visible', text)
-        self.assertIn('Cloudflare API token (visible)', text)
+        self.assertIn('Where to get it: open Telegram, chat with BotFather', text)
+        self.assertIn('What you need: a Cloudflare API token, not the Global API Key.', text)
+
+    def test_domain_format_error_rejects_subdomain_url_and_accepts_root_domain(self):
+        result = self.run_bash(
+            textwrap.dedent(
+                """
+                source ./install_master.sh
+                bad=$(domain_format_error 'https://sub.example.com/path' || true)
+                if good=$(domain_format_error 'example.com'); then
+                  echo unexpected-success
+                  exit 1
+                fi
+                printf '%s|%s' "$bad" "ok"
+                """
+            )
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        self.assertIn('Use only the root domain, without http:// or https://.', result.stdout)
+
+    def test_validate_bot_token_once_reports_invalid_token_from_api(self):
+        result = self.run_bash(
+            textwrap.dedent(
+                """
+                source ./install_master.sh
+                BOT_TOKEN='123:bad'
+                api_json_get_ipv4() {
+                  printf '%s\n401' '{"ok":false,"error_code":401,"description":"Unauthorized"}'
+                }
+                validate_bot_token_once || true
+                printf '%s|%s' "$VALIDATION_INVALID_FIELD" "$VALIDATION_ERROR"
+                """
+            )
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        self.assertIn('bot_token|This is not a valid Telegram bot token (401: Unauthorized).', result.stdout)
+
+    def test_validate_cloudflare_inputs_once_reports_domain_not_found(self):
+        result = self.run_bash(
+            textwrap.dedent(
+                """
+                source ./install_master.sh
+                CLOUDFLARE_API_TOKEN='cf-token'
+                CLOUDFLARE_DOMAIN_NAME='wrong.example.com'
+                api_json_get_ipv4() {
+                  printf '%s\n200' '{"success":true,"result":[]}'
+                }
+                validate_cloudflare_inputs_once || true
+                printf '%s|%s' "$VALIDATION_INVALID_FIELD" "$VALIDATION_ERROR"
+                """
+            )
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        self.assertIn('cloudflare_domain|This domain was not found in the Cloudflare account behind the provided API token.', result.stdout)
 
 
 if __name__ == "__main__":

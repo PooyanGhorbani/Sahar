@@ -77,7 +77,7 @@ draw_screen() {
   printf ' Progress    %s%%
 
 ' "$(progress_percent)"
-  printf '%sBootstrap ensures bash is present, then the main installer asks for bot token, Cloudflare token and domain.%s
+  printf '%sبوت‌استرپ فقط bash را آماده می‌کند؛ بعد از آن نصب اصلی فقط سه چیز می‌پرسد: توکن ربات، توکن کلودفلر و دامنه. / Bootstrap ensures bash is present, then the main installer asks for bot token, Cloudflare token and domain.%s
 ' "$C_YELLOW" "$C_RESET"
 }
 
