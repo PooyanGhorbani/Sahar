@@ -257,7 +257,7 @@ case "$arch" in
   armv7l|armv6l|arm) asset_name="cloudflared-linux-arm" ;;
   *) echo "unsupported arch for cloudflared: $arch" >&2; exit 1 ;;
 esac
-release_json=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.71' "https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}")
+release_json=$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 60 -H 'Accept: application/vnd.github+json' -H 'User-Agent: Sahar/0.1.72' "https://api.github.com/repos/cloudflare/cloudflared/releases/tags/{CLOUDFLARED_VERSION}")
 download_url=$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url' | head -n1)
 expected_digest=$(printf '%s' "$release_json" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' | head -n1 | sed 's/^sha256://')
 [ -n "$download_url" ] || {{ echo 'failed to resolve cloudflared download URL' >&2; exit 1; }}

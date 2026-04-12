@@ -122,6 +122,30 @@ class InstallerRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
 
+    def test_init_config_defaults_auto_enables_cloudflare_when_token_and_domain_are_provided(self):
+        result = self.run_bash(
+            textwrap.dedent(
+                """
+                source ./install_master.sh
+                CLOUDFLARE_ENABLED=
+                CLOUDFLARE_API_TOKEN=token-123
+                CLOUDFLARE_DOMAIN_NAME=example.com
+                init_config_defaults
+                printf '%s|%s|%s' "$CLOUDFLARE_ENABLED" "$CLOUDFLARE_DOMAIN_NAME" "$CLOUDFLARE_BASE_SUBDOMAIN"
+                """
+            )
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)
+        self.assertEqual(result.stdout.strip(), 'true|example.com|vpn')
+
+    def test_install_master_enables_tunnel_flags_in_written_config(self):
+        text = (ROOT / 'install_master.sh').read_text(encoding='utf-8')
+        self.assertIn("'cloudflare_dns_proxied': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true'", text)
+        self.assertIn("'cloudflare_tunnel_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true'", text)
+        self.assertIn("'cloudflare_argo_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true'", text)
+        self.assertIn('Cloudflare API token', text)
+        self.assertIn('Domain for subdomains', text)
+
 
 if __name__ == "__main__":
     unittest.main()

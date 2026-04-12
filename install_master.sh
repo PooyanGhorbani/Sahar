@@ -28,7 +28,7 @@ WHEELHOUSE_DIR="$CACHE_DIR/wheelhouse/master"
 
 LOG_FILE="/tmp/sahar-master-installer.log"
 STATUS_FILE="/tmp/sahar-master-installer.status"
-TOTAL_STEPS=13
+TOTAL_STEPS=16
 CURRENT_STEP=0
 STEP_PROGRESS=0
 STEP_PROGRESS_CEILING=0
@@ -193,9 +193,9 @@ draw_screen() {
   printf ' %sProgress%s    [%s%s%s] %s%3d%%%s
 
 ' "$C_DIM" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$C_BOLD" "$percent" "$C_RESET"
-  printf '%sOnly the bot token is requested. Package details stay hidden.%s
+  printf '%sOnly three values are requested: Telegram bot token, Cloudflare API token and domain.%s
 ' "$C_YELLOW" "$C_RESET"
-  printf '%sPython environment shows cache and wheel activity live.%s
+  printf '%sCloudflare tunnel and DNS are configured automatically when those values are provided.%s
 ' "$C_DIM" "$C_RESET"
 }
 ui_newline() {
@@ -482,6 +482,17 @@ load_saved_bot_token() {
   fi
 }
 
+load_saved_cloudflare_inputs() {
+  if [[ -r "$APP_DATA_DIR/config.json" ]]; then
+    if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+      CLOUDFLARE_DOMAIN_NAME="$(sed -n 's/.*"cloudflare_domain_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_DATA_DIR/config.json" | head -n1)"
+    fi
+    if [[ -z "${CLOUDFLARE_BASE_SUBDOMAIN:-}" ]]; then
+      CLOUDFLARE_BASE_SUBDOMAIN="$(sed -n 's/.*"cloudflare_base_subdomain"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$APP_DATA_DIR/config.json" | head -n1)"
+    fi
+  fi
+}
+
 detect_platform() {
   if [[ ! -r /etc/os-release ]]; then
     echo "Unsupported Linux distribution: /etc/os-release not found"
@@ -656,7 +667,7 @@ first_nonempty() {
 }
 
 init_config_defaults() {
-  local detected_public_ip
+  local detected_public_ip cf_requested
   BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
   ADMIN_CHAT_IDS="${ADMIN_CHAT_IDS:-${SAHAR_ADMIN_CHAT_IDS:-}}"
   SCHEDULER_INTERVAL="${SCHEDULER_INTERVAL:-300}"
@@ -673,10 +684,14 @@ init_config_defaults() {
     SUBSCRIPTION_BASE_URL="http://${detected_public_ip}:${SUBSCRIPTION_BIND_PORT}"
   fi
 
-  CLOUDFLARE_ENABLED="$(parse_bool "${CLOUDFLARE_ENABLED:-false}")"
   CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-}"
-  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-}"
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
   CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+  cf_requested='false'
+  if [[ -n "$CLOUDFLARE_API_TOKEN" || -n "$CLOUDFLARE_DOMAIN_NAME" ]]; then
+    cf_requested='true'
+  fi
+  CLOUDFLARE_ENABLED="$(parse_bool "${CLOUDFLARE_ENABLED:-$cf_requested}")"
   if [[ "$CLOUDFLARE_ENABLED" != "true" ]]; then
     CLOUDFLARE_DOMAIN_NAME=""
     CLOUDFLARE_BASE_SUBDOMAIN=""
@@ -730,32 +745,55 @@ telegram_bot_enabled() {
   [[ -n "${BOT_TOKEN:-}" ]]
 }
 
-prompt_for_bot_token() {
-  if [[ -n "${BOT_TOKEN:-}" ]]; then
+prompt_for_install_inputs() {
+  if [[ ! -t 0 ]]; then
     return 0
   fi
-  if [[ ! -t 0 ]]; then
+  if [[ -n "${BOT_TOKEN:-}" && -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
     return 0
   fi
   if (( UI_TTY )); then
     printf '[H[2J'
-    printf '%s%sTelegram bot token required%s
+    printf '%s%sAutomatic setup%s
 ' "$C_BOLD" "$C_CYAN" "$C_RESET"
     printf '%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s
 ' "$C_DIM" "$C_RESET"
-    printf ' Paste the BotFather token below. Input stays hidden.
+    printf ' Only three values are needed. Cloudflare tunnel and DNS will be configured automatically.
 '
     printf ' The first private chat that sends /start becomes owner automatically.
 
 '
-    read -rsp ' BOT_TOKEN: ' BOT_TOKEN_INPUT || true
-    printf '
-'
-  else
-    read -r -p "BOT_TOKEN: " BOT_TOKEN_INPUT || true
   fi
-  BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
-  CURRENT_LABEL="Bot token captured"
+  if [[ -z "${BOT_TOKEN:-}" ]]; then
+    if (( UI_TTY )); then
+      read -rsp ' 🤖 Telegram BOT_TOKEN: ' BOT_TOKEN_INPUT || true
+      printf '
+'
+    else
+      read -r -p 'Telegram BOT_TOKEN: ' BOT_TOKEN_INPUT || true
+    fi
+    BOT_TOKEN="${BOT_TOKEN_INPUT:-}"
+  fi
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    if (( UI_TTY )); then
+      read -rsp ' ☁️  Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT || true
+      printf '
+'
+    else
+      read -r -p 'Cloudflare API token: ' CLOUDFLARE_API_TOKEN_INPUT || true
+    fi
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN_INPUT:-}"
+  fi
+  if [[ -z "${CLOUDFLARE_DOMAIN_NAME:-}" ]]; then
+    if (( UI_TTY )); then
+      read -r -p ' 🌐 Domain for subdomains (example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
+    else
+      read -r -p 'Domain for subdomains (example.com): ' CLOUDFLARE_DOMAIN_NAME_INPUT || true
+    fi
+    CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME_INPUT:-}"
+  fi
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
+  CURRENT_LABEL="Installer inputs captured"
   CURRENT_STATUS="Ready"
   draw_screen
 }
@@ -800,10 +838,123 @@ validate_bot_token() {
   fi
 }
 
-prepare_bot_token_input() {
+prepare_install_inputs() {
   BOT_TOKEN="${BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+  CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-}}"
+  CLOUDFLARE_DOMAIN_NAME="${CLOUDFLARE_DOMAIN_NAME:-${DOMAIN:-}}"
+  CLOUDFLARE_BASE_SUBDOMAIN="${CLOUDFLARE_BASE_SUBDOMAIN:-vpn}"
   load_saved_bot_token
-  prompt_for_bot_token
+  load_saved_cloudflare_inputs
+  prompt_for_install_inputs
+}
+
+validate_cloudflare_inputs() {
+  local payload response http_code domain zone_id account_id tunnel_ok error_message
+  domain="$(printf '%s' "${CLOUDFLARE_DOMAIN_NAME:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  CLOUDFLARE_DOMAIN_NAME="$domain"
+  if [[ -z "$domain" && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    CLOUDFLARE_ENABLED='false'
+    return 0
+  fi
+  if [[ -z "$domain" || -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    echo 'ERROR: Cloudflare setup needs both CLOUDFLARE_API_TOKEN and CLOUDFLARE_DOMAIN_NAME.'
+    echo 'Provide both values or leave both empty to skip Cloudflare automation.'
+    exit 1
+  fi
+  payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones?name=${domain}" 2>/dev/null || true)"
+  if [[ -z "$payload" ]]; then
+    echo 'ERROR: Could not reach the Cloudflare API to validate the zone.'
+    echo 'Check outbound network access to api.cloudflare.com and rerun the installer.'
+    exit 1
+  fi
+  http_code="${payload##*$'\n'}"
+  response="${payload%$'\n'*}"
+  if [[ -z "$response" ]]; then
+    echo 'ERROR: Cloudflare API returned an empty response while validating the zone.'
+    exit 1
+  fi
+  mapfile -t cf_parts < <(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('json_error')
+    print('invalid JSON from Cloudflare API')
+    print('')
+    print('')
+    raise SystemExit(0)
+if not data.get('success'):
+    errors = data.get('errors') or []
+    msg = '; '.join(str(item.get('message') or item) for item in errors) or 'unknown Cloudflare API error'
+    print('api_error')
+    print(msg)
+    print('')
+    print('')
+    raise SystemExit(0)
+rows = data.get('result') or []
+if not rows:
+    print('zone_missing')
+    print('domain not found in Cloudflare account')
+    print('')
+    print('')
+    raise SystemExit(0)
+row = rows[0]
+print('ok')
+print(row.get('id') or '')
+print(((row.get('account') or {}).get('id')) or '')
+print('')
+PY2
+)
+  case "${cf_parts[0]:-json_error}" in
+    ok)
+      zone_id="${cf_parts[1]:-}"
+      account_id="${cf_parts[2]:-}"
+      ;;
+    *)
+      error_message="${cf_parts[1]:-invalid Cloudflare response}"
+      echo "ERROR: Cloudflare validation failed (${http_code:-unknown}): ${error_message}"
+      exit 1
+      ;;
+  esac
+  if [[ -z "$account_id" ]]; then
+    payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/zones/${zone_id}" 2>/dev/null || true)"
+    response="${payload%$'\n'*}"
+    account_id="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('')
+    raise SystemExit(0)
+print((((data.get('result') or {}).get('account') or {}).get('id')) or '')
+PY2
+)"
+  fi
+  if [[ -z "$account_id" ]]; then
+    echo 'ERROR: Cloudflare account id could not be resolved from the selected zone.'
+    exit 1
+  fi
+  payload="$(curl -sS --connect-timeout 10 --max-time 25 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H 'Content-Type: application/json' -w $'\n%{http_code}' "https://api.cloudflare.com/client/v4/accounts/${account_id}/cfd_tunnel?is_deleted=false&page=1&per_page=1" 2>/dev/null || true)"
+  response="${payload%$'\n'*}"
+  tunnel_ok="$(python3 - "$response" <<'PY2'
+import json, sys
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    print('no')
+    raise SystemExit(0)
+print('yes' if data.get('success') else 'no')
+PY2
+)"
+  if [[ "$tunnel_ok" != 'yes' ]]; then
+    echo 'ERROR: Cloudflare token is valid for the zone, but tunnel access is missing.'
+    echo 'Grant Cloudflare Tunnel read/edit permissions on the same account and rerun the installer.'
+    exit 1
+  fi
+  CLOUDFLARE_ENABLED='true'
 }
 
 ask_config() {
@@ -848,9 +999,9 @@ cfg = {
     'cloudflare_zone_name': os.environ.get('CLOUDFLARE_DOMAIN_NAME', ''),
     'cloudflare_base_subdomain': os.environ.get('CLOUDFLARE_BASE_SUBDOMAIN', ''),
     'cloudflare_token_encryption_key': os.environ.get('CLOUDFLARE_TOKEN_ENCRYPTION_KEY', ''),
-    'cloudflare_dns_proxied': False,
-    'cloudflare_tunnel_enabled': False,
-    'cloudflare_argo_enabled': False,
+    'cloudflare_dns_proxied': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true',
+    'cloudflare_tunnel_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true',
+    'cloudflare_argo_enabled': os.environ.get('CLOUDFLARE_ENABLED', 'false').lower() == 'true',
     'cloudflare_auto_sync_enabled': True,
     'cloudflare_auto_sync_interval_minutes': 30,
     'notify_on_server_status_change': True,
@@ -1176,12 +1327,12 @@ download_xray_release_zip() {
   base_url="${XRAY_DOWNLOAD_BASE_URL:-https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}}"
   download_url="${base_url}/${asset_name}"
   digest_url="${base_url}/${asset_name}.dgst"
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.71" "$download_url" -o "$output_zip"; then
+  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -H "User-Agent: Sahar/0.1.72" "$download_url" -o "$output_zip"; then
     set_fail_hint "Failed to download Xray archive"
     return 1
   fi
   digest_file="$(mktemp)"
-  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.71" "$digest_url" -o "$digest_file"; then
+  if curl -fL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 -H "User-Agent: Sahar/0.1.72" "$digest_url" -o "$digest_file"; then
     digest="$(grep -Eo '[A-Fa-f0-9]{64}' "$digest_file" | head -n1 || true)"
     if [[ -n "$digest" ]]; then
       actual="$(sha256sum "$output_zip" | awk '{print $1}')"
@@ -1366,8 +1517,9 @@ main() {
   print_banner
   require_root
   run_step "Checking system" check_os
-  prepare_bot_token_input
+  prepare_install_inputs
   run_step "Validating bot token" validate_bot_token
+  run_step "Validating Cloudflare access" validate_cloudflare_inputs
   run_step "Running preflight checks" preflight_checks
   run_step "Installing system packages" install_packages
   run_step "Creating service account" ensure_user
@@ -1376,6 +1528,7 @@ main() {
   run_step "Copying application files" copy_code
   run_step "Writing configuration" write_config
   run_step "Building Python environment" setup_venv
+  run_step "Bootstrapping Cloudflare" bootstrap_cloudflare
   run_step "Installing Xray components" install_xray_if_needed
   run_step "Writing service files" write_services
   run_step "Configuring log rotation" write_logrotate

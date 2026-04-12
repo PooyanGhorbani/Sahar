@@ -581,6 +581,26 @@ def _cloudflare_service_url_for_server(server: Dict[str, Any]) -> str:
     return f'http://127.0.0.1:{xray_port}'
 
 
+def _cloudflare_tunnel_ready(server: Dict[str, Any]) -> bool:
+    return _is_local_server(server) or bool(server.get('cf_tunnel_id'))
+
+
+def _mark_cloudflare_tunnel_pending(server: Dict[str, Any], status: str = 'needs_provision') -> None:
+    DB.update_server_tunnel(
+        server['name'],
+        str(server.get('cf_tunnel_id') or ''),
+        str(server.get('cf_tunnel_name') or ''),
+        status,
+        now_iso(),
+    )
+
+
+def _cloudflare_tunnel_not_ready_error(server: Dict[str, Any]) -> CloudflareError:
+    return CloudflareError(
+        f"server {server.get('name')} is not tunnel-ready; add it with SSH provisioning or configure cloudflared on the server first"
+    )
+
+
 def _apply_cloudflare_dns_to_server(server: Dict[str, Any], info: Dict[str, str], *, tunnel: bool) -> Dict[str, Any]:
     updated = DB.get_server(server['name']) or dict(server)
     updated['cf_zone_id'] = info.get('zone_id', '')
@@ -597,7 +617,10 @@ def _apply_cloudflare_dns_to_server(server: Dict[str, Any], info: Dict[str, str]
 
 
 def _sync_cloudflare_for_server(server: Dict[str, Any], *, deploy_runtime_if_local: bool = True) -> Dict[str, str]:
-    if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
+    if getattr(CLOUDFLARE, 'tunnel_enabled', False):
+        if not _cloudflare_tunnel_ready(server):
+            _mark_cloudflare_tunnel_pending(server)
+            raise _cloudflare_tunnel_not_ready_error(server)
         info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
         tunnel_status = 'configured'
         if _is_local_server(server) and deploy_runtime_if_local:
@@ -618,19 +641,22 @@ def _sync_cloudflare_for_server(server: Dict[str, Any], *, deploy_runtime_if_loc
     return info
 
 
-def sync_cloudflare_records() -> tuple[int, list[str]]:
+def sync_cloudflare_records() -> tuple[int, list[str], list[str]]:
     if not getattr(CLOUDFLARE, 'enabled', False):
-        return 0, []
+        return 0, [], []
     synced: list[str] = []
+    warnings: list[str] = []
     for server in DB.list_servers(enabled_only=True):
         try:
             info = _sync_cloudflare_for_server(server)
             synced.append(info['dns_name'])
-        except (CloudflareError, CloudflaredRuntimeError):
+        except (CloudflareError, CloudflaredRuntimeError) as exc:
             LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
-        except Exception:
+            warnings.append(f"{server.get('name')}: {exc}")
+        except Exception as exc:
             LOGGER.exception('cloudflare_sync_failed server=%s', server.get('name'))
-    return len(synced), synced
+            warnings.append(f"{server.get('name')}: {exc}")
+    return len(synced), synced, warnings
 
 
 def do_add_server_via_ssh(name: str, host: str, ssh_port: int, ssh_username: str, ssh_password: str) -> str:
@@ -1009,6 +1035,18 @@ def cloudflare_text() -> str:
         f"• توکن: <code>{token_state}</code>",
     ]
     return list_text('مدیریت Cloudflare', lines)
+
+
+def cloudflare_test_text() -> str:
+    info = CLOUDFLARE.test_connection()
+    lines = [
+        f"• دامنه: <code>{info.get('domain') or '-'}</code>",
+        f"• Zone ID: <code>{info.get('zone_id') or '-'}</code>",
+        f"• Account ID: <code>{info.get('account_id') or '-'}</code>",
+        f"• توکن: <code>{info.get('token') or 'missing'}</code>",
+        f"• Tunnel mode: <code>{'on' if getattr(CLOUDFLARE, 'tunnel_enabled', False) else 'off'}</code>",
+    ]
+    return list_text('تست اتصال Cloudflare', lines)
 
 
 async def show_cloudflare(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1468,7 +1506,10 @@ def do_add_server(name: str, api_url: str, api_token: str, api_tls_fingerprint: 
         audit('add_server', 'server', name, api_url)
         display_host = fresh_server.get('cf_dns_name') or health.get('public_host') or '-'
         display_port = 443 if fresh_server.get('cf_dns_name') else (health.get('xray_port') or health.get('simple_port') or fresh_server.get('xray_port') or '-')
-        return f"✅ سرور ذخیره شد: {name} → {display_host}:{display_port}"
+        tunnel_note = ''
+        if getattr(CLOUDFLARE, 'tunnel_enabled', False) and fresh_server and not _cloudflare_tunnel_ready(fresh_server):
+            tunnel_note = '\n⚠️ Tunnel برای این سرور هنوز provision نشده است؛ برای فعال‌سازی، سرور را با SSH اضافه کن یا cloudflared را روی همان سرور راه‌اندازی کن.'
+        return f"✅ سرور ذخیره شد: {name} → {display_host}:{display_port}{tunnel_note}"
     except Exception as exc:
         mark_server_stage(name, 'failed', str(exc))
         code = record_error(DB, LOGGER, component='agent', target_type='server', target_key=name, message='add server failed', exc=exc)
@@ -2183,12 +2224,24 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if user:
                 regenerate_subscription_token_for_user(username)
                 await send_temp(update, f"♻️ لینک جدید: <code>{html.escape(subscription_url_for_user(username))}</code>")
+        elif data == 'act:cloudflare_test':
+            if await deny_if_not_admin(update, 'owner'):
+                return
+            try:
+                await send_temp(update, cloudflare_test_text())
+            except Exception as exc:
+                await send_temp(update, f"❌ تست اتصال Cloudflare ناموفق بود: <code>{html.escape(str(exc))}</code>")
         elif data == 'act:cloudflare_sync_all':
             if await deny_if_not_admin(update, 'owner'):
                 return
-            count, names = sync_cloudflare_records()
+            count, names, warnings = sync_cloudflare_records()
             if count:
-                await send_temp(update, '✅ رکوردهای DNS به‌روزرسانی شدند:\n' + '\n'.join(names[:20]))
+                message = '✅ رکوردهای DNS به‌روزرسانی شدند:\n' + '\n'.join(names[:20])
+                if warnings:
+                    message += '\n\n⚠️ موارد نیازمند رسیدگی:\n' + '\n'.join(html.escape(item) for item in warnings[:10])
+                await send_temp(update, message)
+            elif warnings:
+                await send_temp(update, '⚠️ همگام‌سازی Cloudflare کامل نشد:\n' + '\n'.join(html.escape(item) for item in warnings[:10]))
             else:
                 await send_temp(update, 'ℹ️ هیچ رکوردی برای سینک پیدا نشد یا Cloudflare هنوز تنظیم نشده است.')
         elif data.startswith('act:link:'):
@@ -2280,16 +2333,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             server = DB.get_server_by_id(server_id)
             if server:
                 try:
-                    if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
-                        info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
-                        if _is_local_server(server):
-                            deploy_local_service(info['tunnel_token'])
-                        DB.update_server_tunnel(server['name'], info['tunnel_id'], info['tunnel_name'], 'configured', now_iso())
-                        DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
-                    else:
-                        target = str(server.get('public_host') or '').strip()
-                        info = CLOUDFLARE.ensure_server_dns(server['name'], _resolve_target_ip_for_dns(target))
-                        DB.update_server_dns(server['name'], info['zone_id'], info['record_id'], info['dns_name'], now_iso(), info.get('record_type', ''))
+                    info = _sync_cloudflare_for_server(server)
                     await send_temp(update, f"✅ Cloudflare برای {server['name']} همگام شد. <code>{html.escape(info.get('dns_name', '-'))}</code>")
                 except Exception as exc:
                     await send_temp(update, f"❌ خطا در همگام‌سازی Cloudflare: <code>{html.escape(str(exc))}</code>")

@@ -107,7 +107,7 @@ class BotSearchRenderTests(unittest.TestCase):
             'warn_usage_percent': 80,
             'backup_interval_hours': 24,
             'backup_retention': 5,
-            'package_version': '0.1.71',
+            'package_version': '0.1.72',
             'cloudflare_enabled': False,
             'cloudflare_domain_name': '',
             'cloudflare_zone_name': '',

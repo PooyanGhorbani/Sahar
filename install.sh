@@ -77,7 +77,7 @@ draw_screen() {
   printf ' Progress    %s%%
 
 ' "$(progress_percent)"
-  printf '%sBootstrap only ensures bash is present, then hands off to the main installer.%s
+  printf '%sBootstrap ensures bash is present, then the main installer asks for bot token, Cloudflare token and domain.%s
 ' "$C_YELLOW" "$C_RESET"
 }
 

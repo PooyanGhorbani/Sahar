@@ -60,7 +60,7 @@ class PanelLogicTests(unittest.TestCase):
         text = build_dashboard_text(
             users=[{'is_active': True}, {'is_active': False}],
             servers=[{'enabled': True, 'last_health_status': 'ok'}, {'enabled': True, 'last_health_status': 'warn'}],
-            version='0.1.71',
+            version='0.1.72',
             bot_state='active',
             scheduler_state='active',
             subscription_state='inactive',

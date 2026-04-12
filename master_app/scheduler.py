@@ -126,7 +126,10 @@ def sync_cloudflare_if_needed() -> tuple[int, list[str]]:
     synced: list[str] = []
     for server in DB.list_servers(enabled_only=True):
         try:
-            if getattr(CLOUDFLARE, 'tunnel_enabled', False) and (_is_local_server(server) or server.get('cf_tunnel_id')):
+            if getattr(CLOUDFLARE, 'tunnel_enabled', False):
+                if not (_is_local_server(server) or server.get('cf_tunnel_id')):
+                    DB.update_server_tunnel(server['name'], str(server.get('cf_tunnel_id') or ''), str(server.get('cf_tunnel_name') or ''), 'needs_provision', now_iso())
+                    raise RuntimeError(f"server {server.get('name')} is not tunnel-ready; add it with SSH provisioning or configure cloudflared on the server first")
                 info = CLOUDFLARE.ensure_remote_tunnel(server['name'], _cloudflare_service_url_for_server(server), existing=server)
                 tunnel_status = 'configured'
                 if _is_local_server(server):
